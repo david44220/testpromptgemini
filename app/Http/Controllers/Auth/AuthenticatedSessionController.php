@@ -50,8 +50,10 @@ class AuthenticatedSessionController extends Controller
             ],
         ];
 
+        $isDemoMode = (bool) config('duels.demo_mode', false);
+
         return view('auth.login', [
-            'demoAccounts' => $demoAccounts,
+            'demoAccounts' => $isDemoMode ? $demoAccounts : [],
         ]);
     }
 
@@ -84,6 +86,10 @@ class AuthenticatedSessionController extends Controller
         $request->validate([
             'email' => ['required', 'email'],
         ]);
+
+        if (! config('duels.demo_mode', false)) {
+            abort(403, 'Demo login is disabled in production mode.');
+        }
 
         $allowedDemoEmails = [
             'apex@cyber-rail.gg',

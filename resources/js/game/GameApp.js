@@ -40,8 +40,12 @@ export class GameApp {
         this.opponentScore = 0;
         this.opponentDistance = 0;
 
-        // 1. Core Systems
-        this.prng = new PRNG(this.gameSeed);
+        // 1. Core Systems with Strict PRNG Isolation
+        this.gameplayPrng = new PRNG(this.gameSeed + ':gameplay');
+        this.cosmeticPrng = new PRNG(this.gameSeed + ':cosmetic');
+        this.ticketToken = null;
+        this.isStarting = false;
+
         this.inputManager = new InputManager(this.canvas);
         this.recorder = new RecorderSystem(this.gameSeed, 60);
 
@@ -56,7 +60,7 @@ export class GameApp {
         this.player = new Player(this.engine.scene);
         this.ghostRunner = new GhostRunner(this.engine.scene);
         this.trackPool = new TrackPool(this.engine.scene, 10, 30);
-        this.obstaclePool = new ObstaclePool(this.engine.scene, this.prng);
+        this.obstaclePool = new ObstaclePool(this.engine.scene, this.gameplayPrng, this.cosmeticPrng);
         this.skyline = new SkylineBackground(this.engine.scene, this.engine.camera);
 
         // 4. Real-time Reverb Synchronization
@@ -150,14 +154,55 @@ export class GameApp {
     }
 
     /**
-     * Begins the run.
+     * Begins the run. Authenticates ticket in paid mode before entering PLAYING state.
      */
-    startGame() {
-        if (this.state === 'PLAYING') return;
-
-        this.state = 'PLAYING';
+    async startGame() {
+        if (this.state === 'PLAYING' || this.isStarting) return;
 
         const startBanner = document.getElementById('hud-start-banner');
+        const bannerTitle = startBanner ? startBanner.querySelector('h1') : null;
+        const bannerSub = startBanner ? startBanner.querySelector('p') : null;
+
+        // Authoritative Duel: Negotiate ticket with server before simulation starts
+        if (this.matchUuid) {
+            this.isStarting = true;
+            if (bannerSub) bannerSub.textContent = 'CONNECTING TO AUTHORITATIVE NEURAL ARENA...';
+
+            try {
+                const res = await fetch(`/api/v1/duels/matches/${this.matchUuid}/start-run`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                        ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+                    },
+                });
+
+                const data = await res.json();
+                if (!res.ok) {
+                    this.isStarting = false;
+                    if (bannerTitle) bannerTitle.textContent = 'ACCESS REJECTED';
+                    if (bannerSub) bannerSub.textContent = data.message || 'Match no longer accepting runs.';
+                    return;
+                }
+
+                this.ticketToken = data.ticket_token;
+                if (data.game_seed) {
+                    this.gameSeed = data.game_seed;
+                }
+            } catch {
+                this.isStarting = false;
+                if (bannerTitle) bannerTitle.textContent = 'CONNECTION ERROR';
+                if (bannerSub) bannerSub.textContent = 'Failed to obtain run ticket. Please check network.';
+                return;
+            } finally {
+                this.isStarting = false;
+            }
+        }
+
+        this.resetRun(this.gameSeed);
+        this.state = 'PLAYING';
+
         if (startBanner) {
             startBanner.style.display = 'none';
         }
@@ -168,29 +213,38 @@ export class GameApp {
             postModal.classList.remove('opacity-100', 'pointer-events-auto');
         }
 
-        this.recorder.start(this.gameSeed);
         this.engine.start();
     }
 
     /**
-     * Restarts with either the same or a newly generated seed.
+     * Resets engine, simulation state, isolated PRNGs, and physics runner.
+     * @param {string} seed
      */
-    restartGame(newSeed = null) {
-        if (newSeed) {
-            this.gameSeed = newSeed;
-            this.prng = new PRNG(this.gameSeed);
-        } else {
-            // Re-seed PRNG with the initial seed for exact deterministic retry
-            this.prng = new PRNG(this.gameSeed);
-        }
+    resetRun(seed) {
+        this.gameSeed = seed;
+        this.gameplayPrng = new PRNG(this.gameSeed + ':gameplay');
+        this.cosmeticPrng = new PRNG(this.gameSeed + ':cosmetic');
+        this.obstaclePool.gameplayPrng = this.gameplayPrng;
+        this.obstaclePool.cosmeticPrng = this.cosmeticPrng;
 
         this.score = 0;
         this.coins = 0;
         this.distance = 0;
         this.multiplier = 1;
 
+        this.engine.reset();
         this.player.reset();
+        this.recorder.reset();
+        this.recorder.start(this.gameSeed);
         this._prepopulateTrack();
+    }
+
+    /**
+     * Restarts with either the same or a newly generated seed.
+     */
+    restartGame(newSeed = null) {
+        const seed = newSeed || this.gameSeed;
+        this.resetRun(seed);
         this.startGame();
     }
 
@@ -418,8 +472,11 @@ export class GameApp {
 
         this.lastExportPayload = payload;
 
-        // Automatically submit run payload for deterministic server-side audit
-        if (this.matchUuid) {
+        // Automatically submit run payload with single-use ticket token for deterministic server-side audit
+        if (this.matchUuid && this.ticketToken) {
+            const tokenToSubmit = this.ticketToken;
+            this.ticketToken = null;
+
             fetch(`/api/v1/duels/matches/${this.matchUuid}/submit-run`, {
                 method: 'POST',
                 headers: {
@@ -428,6 +485,7 @@ export class GameApp {
                     ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
                 body: JSON.stringify({
+                    ticket_token: tokenToSubmit,
                     ticks_elapsed: tick,
                     final_distance: Math.floor(this.distance * 100) / 100,
                     final_score: Math.floor(this.score),

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Ads;
 
+use App\Contracts\RewardedAdVerifier;
+use App\Models\RewardGrant;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 
@@ -87,22 +89,48 @@ class AdService
         ];
     }
 
+    public function __construct(
+        protected RewardedAdVerifier $verifier
+    ) {}
+
     /**
-     * Grants reward to user after successfully completing a rewarded sponsor clip.
+     * Grants reward to user after successfully completing a verified rewarded sponsor clip.
      *
      * @return array<string, mixed>
      */
-    public function claimRewardedAd(User $user, string $creativeId): array
+    public function claimRewardedAd(User $user, string $creativeId, string $providerEventId, ?string $token = null): array
     {
-        // Tag user with active rake discount token for next duel
-        $discountKey = "user_rake_discount:{$user->id}";
-        Cache::put($discountKey, 2.0, now()->addHours(24));
+        // 1. Check for replay abuse
+        $existing = RewardGrant::where('provider_event_id', $providerEventId)->first();
+        if ($existing !== null) {
+            throw new \DomainException('This ad completion event has already been recorded.');
+        }
+
+        // 2. Verify via verifier (fails closed in production)
+        if (! $this->verifier->verify($providerEventId, $creativeId, $user, $token)) {
+            throw new \DomainException('Rewarded ad verification failed or verification provider is not configured.');
+        }
+
+        // 3. Persist grant
+        $grant = RewardGrant::create([
+            'user_id' => $user->id,
+            'creative_id' => $creativeId,
+            'provider_event_id' => $providerEventId,
+            'reward_type' => 'RAKE_DISCOUNT_2_PERCENT',
+            'value_bps' => 200,
+            'expires_at' => now()->addHours(24),
+        ]);
+
+        $defaultRakeBps = (int) config('duels.default_rake_bps', 1000);
+        $effectiveRake = max(0, $defaultRakeBps - $grant->value_bps) / 100;
 
         return [
             'status' => 'REWARD_GRANTED',
+            'grant_id' => $grant->id,
             'reward_type' => 'RAKE_DISCOUNT_2_PERCENT',
-            'effective_rake_percentage' => 8.0,
-            'expires_at' => now()->addHours(24)->toIso8601String(),
+            'value_bps' => 200,
+            'effective_rake_percentage' => $effectiveRake,
+            'expires_at' => $grant->expires_at->toIso8601String(),
         ];
     }
 }

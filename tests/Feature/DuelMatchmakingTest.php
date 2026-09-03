@@ -40,7 +40,6 @@ class DuelMatchmakingTest extends TestCase
 
         $response = $this->postJson('/api/v1/duels/lobbies', [
             'stake_amount_cents' => 2000,
-            'rake_percentage' => 10.00,
         ]);
 
         $response->assertStatus(201)

@@ -24,11 +24,13 @@ class UserDashboardController extends Controller
         /** @var User $user */
         $user = Auth::user();
 
-        // Ensure wallet exists
+        // Ensure wallet exists with demo mode isolation
+        $isDemoMode = (bool) config('duels.demo_mode', false);
+        $initialBalance = $isDemoMode ? 10000 : 0;
         $wallet = $user->wallet ?: Wallet::create([
             'user_id' => $user->id,
             'currency' => 'USD',
-            'balance_cents' => 10000,
+            'balance_cents' => $initialBalance,
             'bonus_balance_cents' => 0,
             'locked_balance_cents' => 0,
         ]);
@@ -87,6 +89,10 @@ class UserDashboardController extends Controller
      */
     public function deposit(Request $request): RedirectResponse
     {
+        if (! config('duels.demo_mode', false)) {
+            abort(403, 'Simulated deposits are disabled in production.');
+        }
+
         $validated = $request->validate([
             'amount_dollars' => ['required', 'numeric', 'min:10', 'max:5000'],
         ]);

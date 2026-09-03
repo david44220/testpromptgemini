@@ -8,12 +8,14 @@ use App\Enums\AuditStatus;
 use App\Enums\MatchStatus;
 use App\Events\Duel\DuelOpponentJoined;
 use App\Events\Duel\DuelTelemetryUpdated;
+use App\Exceptions\InsufficientFundsException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CreateLobbyRequest;
 use App\Http\Requests\SubmitRunPayloadRequest;
 use App\Jobs\ProcessDuelSettlement;
 use App\Models\DuelRun;
 use App\Models\MatchGame;
+use App\Models\RewardGrant;
 use App\Models\User;
 use App\Services\AntiCheat\RunAuditService;
 use App\Services\Financial\WalletLedgerService;
@@ -41,42 +43,63 @@ class DuelLobbyController extends Controller
         $user = $request->user();
         $validated = $request->validated();
         $stake = (int) $validated['stake_amount_cents'];
-        $rakePercentage = isset($validated['rake_percentage']) ? (float) $validated['rake_percentage'] : 10.00;
 
         /** @var MatchGame $match */
-        $match = DB::transaction(function () use ($user, $stake, $rakePercentage): MatchGame {
-            $match = MatchGame::create([
-                'creator_user_id' => $user->id,
-                'stake_amount_cents' => $stake,
-                'rake_percentage' => $rakePercentage,
-                'status' => MatchStatus::WaitingForOpponent,
-            ]);
+        try {
+            $match = DB::transaction(function () use ($user, $stake): MatchGame {
+                // Check if user has an active unconsumed reward grant
+                /** @var RewardGrant|null $grant */
+                $grant = RewardGrant::where('user_id', $user->id)
+                    ->whereNull('consumed_at')
+                    ->where('expires_at', '>', now())
+                    ->lockForUpdate()
+                    ->first();
 
-            // Lock creator stake into escrow
-            $this->walletLedgerService->lockStake($user, $match);
+                $defaultRakeBps = (int) config('duels.default_rake_bps', 1000);
+                $rakeBps = $defaultRakeBps;
 
-            // Create initial DuelRun entry for creator
-            DuelRun::create([
-                'match_id' => $match->id,
-                'user_id' => $user->id,
-                'session_secret' => bin2hex(random_bytes(32)),
-                'audit_status' => AuditStatus::Pending,
-            ]);
+                if ($grant !== null) {
+                    $grant->consumed_at = now();
+                    $grant->save();
+                    $rakeBps = max(0, $defaultRakeBps - $grant->value_bps);
+                }
 
-            return $match;
-        });
+                $match = MatchGame::create([
+                    'creator_user_id' => $user->id,
+                    'stake_amount_cents' => $stake,
+                    'rake_bps' => $rakeBps,
+                    'rake_percentage' => (string) number_format($rakeBps / 100, 2, '.', ''),
+                    'status' => MatchStatus::WaitingForOpponent,
+                ]);
 
-        return response()->json([
-            'message' => 'Duel lobby created successfully.',
-            'lobby' => [
-                'uuid' => $match->uuid,
-                'stake_amount_cents' => $match->stake_amount_cents,
-                'rake_percentage' => $match->rake_percentage,
-                'game_seed' => $match->game_seed,
-                'status' => $match->status->value,
-                'created_at' => $match->created_at->toISOString(),
-            ],
-        ], 201);
+                // Lock creator stake into escrow
+                $this->walletLedgerService->lockStake($user, $match);
+
+                // Create initial DuelRun entry for creator
+                DuelRun::create([
+                    'match_id' => $match->id,
+                    'user_id' => $user->id,
+                    'audit_status' => AuditStatus::Pending,
+                ]);
+
+                return $match;
+            });
+
+            return response()->json([
+                'message' => 'Duel lobby created successfully.',
+                'lobby' => [
+                    'uuid' => $match->uuid,
+                    'stake_amount_cents' => $match->stake_amount_cents,
+                    'rake_percentage' => $match->rake_percentage,
+                    'status' => $match->status->value,
+                    'created_at' => $match->created_at->toISOString(),
+                ],
+            ], 201);
+        } catch (InsufficientFundsException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     /**
@@ -139,9 +162,11 @@ class DuelLobbyController extends Controller
                     ], 422);
                 }
 
-                // Pair opponent and transition status
+                // Pair opponent and transition status with explicit domain deadlines
                 $match->opponent_user_id = $user->id;
                 $match->status = MatchStatus::InProgress;
+                $match->in_progress_at = now();
+                $match->abandon_deadline_at = now()->addMinutes((int) config('duels.abandon_timeout_minutes', 10));
                 $match->save();
 
                 // Lock opponent stake into escrow
@@ -154,7 +179,6 @@ class DuelLobbyController extends Controller
                         'user_id' => $user->id,
                     ],
                     [
-                        'session_secret' => bin2hex(random_bytes(32)),
                         'audit_status' => AuditStatus::Pending,
                     ]
                 );
@@ -172,6 +196,10 @@ class DuelLobbyController extends Controller
                     ],
                 ]);
             });
+        } catch (InsufficientFundsException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
         } finally {
             $lock->release();
         }
@@ -179,82 +207,104 @@ class DuelLobbyController extends Controller
 
     /**
      * 4. POST /api/v1/duels/matches/{uuid}/start-run
-     * Issues single-use run ticket containing ephemeral timestamp and HMAC secret.
+     * Issues single-use cryptographically secure run ticket; stores SHA-256 hash in database.
      */
     public function startRun(string $uuid, Request $request): JsonResponse
     {
         /** @var User $user */
         $user = $request->user();
 
-        /** @var MatchGame|null $match */
-        $match = MatchGame::where('uuid', $uuid)->first();
+        return DB::transaction(function () use ($uuid, $user): JsonResponse {
+            /** @var MatchGame|null $match */
+            $match = MatchGame::where('uuid', $uuid)->lockForUpdate()->first();
 
-        if ($match === null) {
-            return response()->json(['message' => 'Match not found.'], 404);
-        }
+            if ($match === null) {
+                return response()->json(['message' => 'Match not found.'], 404);
+            }
 
-        if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
-            return response()->json(['message' => 'Match is not in an active running state.'], 409);
-        }
+            if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
+                return response()->json(['message' => 'Match is not in an active running state.'], 409);
+            }
 
-        if ($match->creator_user_id !== $user->id && $match->opponent_user_id !== $user->id) {
-            return response()->json(['message' => 'Unauthorized: not a participant in this match.'], 403);
-        }
+            if ((int) $match->creator_user_id !== (int) $user->id && (int) $match->opponent_user_id !== (int) $user->id) {
+                return response()->json(['message' => 'Unauthorized: not a participant in this match.'], 403);
+            }
 
-        /** @var DuelRun $run */
-        $run = DuelRun::firstOrCreate(
-            ['match_id' => $match->id, 'user_id' => $user->id],
-            ['session_secret' => bin2hex(random_bytes(32)), 'audit_status' => AuditStatus::Pending]
-        );
+            /** @var DuelRun $run */
+            $run = DuelRun::where('match_id', $match->id)
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->first();
 
-        if ($run->submitted_at !== null) {
-            return response()->json(['message' => 'Run has already been completed and submitted.'], 409);
-        }
+            if ($run === null) {
+                $run = new DuelRun([
+                    'match_id' => $match->id,
+                    'user_id' => $user->id,
+                    'audit_status' => AuditStatus::Pending,
+                ]);
+            }
 
-        // Issue ticket if not yet issued or refreshed
-        if ($run->ticket_token === null || $run->started_at === null) {
-            $run->ticket_token = Str::random(40);
+            if ($run->submitted_at !== null) {
+                return response()->json(['message' => 'Run has already been completed and submitted.'], 409);
+            }
+
+            // Issue single-use cryptographically secure raw token; persist SHA-256 hash
+            $rawTicket = Str::random(48);
+            $run->ticket_token = null; // Do not keep raw token in plaintext
+            $run->ticket_hash = hash('sha256', $rawTicket);
+            $run->ticket_expires_at = now()->addMinutes(10);
             $run->started_at = now();
             $run->save();
-        }
 
-        return response()->json([
-            'ticket_token' => $run->ticket_token,
-            'started_at' => $run->started_at->toISOString(),
-            'game_seed' => $match->game_seed,
-            'match_uuid' => $match->uuid,
-        ]);
+            return response()->json([
+                'ticket_token' => $rawTicket,
+                'started_at' => $run->started_at->toISOString(),
+                'game_seed' => $match->game_seed,
+                'match_uuid' => $match->uuid,
+            ]);
+        });
     }
 
     /**
      * 5. POST /api/v1/duels/matches/{uuid}/submit-run
-     * Receives run payload, validates deterministic kinematics, saves run, and queues verification.
+     * Receives run payload, validates ticket atomically, simulates authoritative kinematics,
+     * updates match timing, and dispatches settlement via DB::afterCommit().
      */
     public function submitRun(string $uuid, SubmitRunPayloadRequest $request): JsonResponse
     {
         /** @var User $user */
         $user = $request->user();
-
-        /** @var MatchGame|null $match */
-        $match = MatchGame::where('uuid', $uuid)->first();
-
-        if ($match === null) {
-            return response()->json(['message' => 'Match not found.'], 404);
-        }
-
-        if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
-            return response()->json(['message' => 'Match is not accepting run submissions.'], 409);
-        }
-
         $validated = $request->validated();
+        $ticketToken = (string) $validated['ticket_token'];
         $ticks = (int) $validated['ticks_elapsed'];
         $score = (int) $validated['final_score'];
         $distance = (float) $validated['final_distance'];
         $inputs = $validated['inputs'] ?? [];
-        $signature = (string) ($validated['signature'] ?? '');
         $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
 
-        return DB::transaction(function () use ($match, $user, $ticks, $score, $distance, $inputs, $signature, $inputsHash): JsonResponse {
+        return DB::transaction(function () use ($uuid, $user, $ticketToken, $ticks, $score, $distance, $inputs, $inputsHash): JsonResponse {
+            // 1. Strict lock hierarchy: Lock MatchGame row first
+            /** @var MatchGame|null $match */
+            $match = MatchGame::where('uuid', $uuid)->lockForUpdate()->first();
+
+            if ($match === null) {
+                return response()->json(['message' => 'Match not found.'], 404);
+            }
+
+            if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
+                return response()->json(['message' => 'Match is not accepting run submissions.'], 409);
+            }
+
+            if ((int) $match->creator_user_id !== (int) $user->id && (int) $match->opponent_user_id !== (int) $user->id) {
+                return response()->json(['message' => 'Unauthorized: not a participant in this match.'], 403);
+            }
+
+            // Reject if forfeit deadline already expired
+            if ($match->forfeit_deadline_at !== null && now()->isAfter($match->forfeit_deadline_at)) {
+                return response()->json(['message' => 'Forfeit deadline has expired for this match.'], 409);
+            }
+
+            // 2. Lock caller's DuelRun row
             /** @var DuelRun|null $run */
             $run = DuelRun::where('match_id', $match->id)
                 ->where('user_id', $user->id)
@@ -269,13 +319,30 @@ class DuelLobbyController extends Controller
                 return response()->json(['message' => 'Run has already been submitted.'], 409);
             }
 
-            // Server-side deterministic kinematic simulation and audit
+            // 3. Atomically validate one-time ticket token
+            $submittedHash = hash('sha256', $ticketToken);
+            if ($run->ticket_hash === null || ! hash_equals($run->ticket_hash, $submittedHash)) {
+                return response()->json(['message' => 'Invalid or missing run ticket.'], 403);
+            }
+
+            if ($run->ticket_expires_at !== null && now()->isAfter($run->ticket_expires_at)) {
+                return response()->json(['message' => 'Run ticket has expired.'], 403);
+            }
+
+            if ($run->started_at === null) {
+                return response()->json(['message' => 'Run was not officially started via start-run.'], 403);
+            }
+
+            // Invalidate ticket to guarantee one-time consumption
+            $run->ticket_hash = null;
+            $run->ticket_expires_at = null;
+
+            // 4. Server-side authoritative kinematic simulation and anti-cheat audit
             $payload = [
                 'ticks_elapsed' => $ticks,
                 'final_distance' => $distance,
                 'final_score' => $score,
                 'inputs' => $inputs,
-                'signature' => $signature,
                 'started_at' => $run->started_at,
                 'submitted_at' => now(),
             ];
@@ -298,20 +365,36 @@ class DuelLobbyController extends Controller
                 ], 403);
             }
 
-            // Store verified run
+            // Store authoritative verified run
             $run->submitted_at = now();
-            $run->ticks_elapsed = $ticks;
-            $run->final_score = $score;
-            $run->final_distance = (string) $distance;
+            $run->ticks_elapsed = (int) $auditResult->telemetry['ticks_elapsed'];
+            $run->final_score = (int) $auditResult->telemetry['final_score'];
+            $run->final_distance = (string) $auditResult->telemetry['final_distance'];
             $run->inputs_hash = $inputsHash;
             $run->input_log = $inputs;
-            $run->client_signature = $signature;
             $run->audit_status = AuditStatus::Passed;
             $run->audit_failure_reason = null;
             $run->save();
 
-            // Queue asynchronous settlement job
-            ProcessDuelSettlement::dispatch($match->id);
+            // 5. Update match timing metadata
+            if ($match->first_run_submitted_at === null) {
+                $match->first_run_submitted_at = now();
+                $match->forfeit_deadline_at = now()->addSeconds((int) config('duels.forfeit_timeout_seconds', 180));
+                $match->save();
+            }
+
+            // Check if both runs are submitted
+            $totalSubmitted = DuelRun::where('match_id', $match->id)
+                ->whereNotNull('submitted_at')
+                ->count();
+
+            $matchId = $match->id;
+            if ($totalSubmitted >= 2) {
+                DB::afterCommit(fn () => ProcessDuelSettlement::dispatch($matchId));
+            } else {
+                $delaySeconds = (int) config('duels.forfeit_timeout_seconds', 180);
+                DB::afterCommit(fn () => ProcessDuelSettlement::dispatch($matchId)->delay(now()->addSeconds($delaySeconds)));
+            }
 
             return response()->json([
                 'message' => 'Run submitted successfully and verified.',

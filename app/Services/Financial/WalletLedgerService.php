@@ -110,7 +110,12 @@ class WalletLedgerService
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($lockedMatch->status === MatchStatus::Completed || $lockedMatch->status === MatchStatus::Cancelled) {
+            // Idempotent no-op if already cancelled
+            if ($lockedMatch->status === MatchStatus::Cancelled) {
+                return;
+            }
+
+            if ($lockedMatch->status === MatchStatus::Completed || $lockedMatch->status === MatchStatus::Disputed) {
                 throw new InvalidMatchStateException("Match #{$lockedMatch->id} cannot be cancelled in state {$lockedMatch->status->value}.");
             }
 
@@ -129,9 +134,14 @@ class WalletLedgerService
                     ->lockForUpdate()
                     ->firstOrFail();
 
+                if ($wallet->locked_balance_cents < $lockedMatch->stake_amount_cents) {
+                    throw new InsufficientFundsException("Wallet #{$wallet->id} locked balance insufficient for escrow release.");
+                }
+
                 // Reverse the lock, credit back to balance_cents, decrement locked_balance_cents
                 $wallet->balance_cents += $lockedMatch->stake_amount_cents;
                 $wallet->locked_balance_cents -= $lockedMatch->stake_amount_cents;
+                assert($wallet->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
                 $wallet->save();
 
                 $groupId = (string) Str::uuid();
@@ -182,14 +192,37 @@ class WalletLedgerService
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            // Idempotent no-op if already Disputed
+            if ($lockedMatch->status === MatchStatus::Disputed) {
+                return;
+            }
+
+            if ($lockedMatch->status !== MatchStatus::InProgress && $lockedMatch->status !== MatchStatus::Ready) {
+                throw new InvalidMatchStateException("Match #{$lockedMatch->id} cannot be disputed in state {$lockedMatch->status->value}.");
+            }
+
+            if ($honestPlayer->id === $cheater->id) {
+                throw new InvalidMatchStateException('Honest player and cheater cannot be the same user.');
+            }
+
+            $participants = [$lockedMatch->creator_user_id, $lockedMatch->opponent_user_id];
+            if (! in_array($honestPlayer->id, $participants, true) || ! in_array($cheater->id, $participants, true)) {
+                throw new InvalidMatchStateException("Honest player and cheater must both be participants in match #{$lockedMatch->id}.");
+            }
+
             /** @var Wallet $honestWallet */
             $honestWallet = Wallet::where('user_id', $honestPlayer->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            if ($honestWallet->locked_balance_cents < $lockedMatch->stake_amount_cents) {
+                throw new InsufficientFundsException("Honest player #{$honestPlayer->id} locked balance insufficient for dispute refund.");
+            }
+
             // Return locked stake back to honest player's available balance
             $honestWallet->locked_balance_cents -= $lockedMatch->stake_amount_cents;
             $honestWallet->balance_cents += $lockedMatch->stake_amount_cents;
+            assert($honestWallet->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
             $honestWallet->save();
 
             $groupId = (string) Str::uuid();
@@ -246,6 +279,11 @@ class WalletLedgerService
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            // Idempotent no-op if already Completed
+            if ($lockedMatch->status === MatchStatus::Completed) {
+                return;
+            }
+
             if ($lockedMatch->status !== MatchStatus::InProgress && $lockedMatch->status !== MatchStatus::Ready) {
                 throw new InvalidMatchStateException("Match must be InProgress or Ready to settle, current: {$lockedMatch->status->value}.");
             }
@@ -275,13 +313,18 @@ class WalletLedgerService
                 if ($w === null) {
                     throw new InsufficientFundsException("Wallet not found for participant #{$uid}.");
                 }
+                if ($w->locked_balance_cents < $lockedMatch->stake_amount_cents) {
+                    throw new InsufficientFundsException("Wallet #{$w->id} locked balance insufficient for settlement deduction.");
+                }
                 $w->locked_balance_cents -= $lockedMatch->stake_amount_cents;
+                assert($w->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
                 $w->save();
             }
 
-            // Calculate rake and payout with strict integer conservation
+            // Calculate rake and payout with strict integer arithmetic using basis points
             $totalPot = $lockedMatch->stake_amount_cents * 2;
-            $platformFee = (int) intval(round(($totalPot * (float) $lockedMatch->rake_percentage) / 100));
+            $rakeBps = $lockedMatch->rake_bps ?? (int) round(((float) $lockedMatch->rake_percentage) * 100);
+            $platformFee = intdiv($totalPot * $rakeBps + 5000, 10_000);
             $payout = $totalPot - $platformFee;
 
             assert(($payout + $platformFee) === $totalPot, 'Ledger imbalance detected in pot distribution.');

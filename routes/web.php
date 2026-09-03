@@ -1,13 +1,14 @@
 <?php
 
+use App\Enums\MatchStatus;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\UserDashboardController;
+use App\Models\MatchGame;
 use App\Models\User;
 use App\Models\Wallet;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Str;
 
 Route::get('/', function () {
     return view('welcome');
@@ -36,11 +37,12 @@ Route::middleware('auth')->group(function () {
     Route::get('/lobby', function (Request $request) {
         /** @var User $user */
         $user = $request->user();
+        $initialBalance = config('duels.demo_mode', false) ? 10000 : 0;
         $wallet = $user->wallet ?: Wallet::firstOrCreate(
             ['user_id' => $user->id],
             [
                 'currency' => 'USD',
-                'balance_cents' => 10000,
+                'balance_cents' => $initialBalance,
                 'bonus_balance_cents' => 0,
                 'locked_balance_cents' => 0,
             ]
@@ -52,36 +54,88 @@ Route::middleware('auth')->group(function () {
         ]);
     })->name('duels.lobby');
 
-    // 3D Combat Arena (Auth Required - Staking with Authenticated Wallet)
+    // Practice / Solo Simulation Mode (No real stake, no match UUID)
     Route::get('/game', function (Request $request) {
         /** @var User $user */
         $user = $request->user();
+        $initialBalance = config('duels.demo_mode', false) ? 10000 : 0;
         $wallet = $user->wallet ?: Wallet::firstOrCreate(
             ['user_id' => $user->id],
             [
                 'currency' => 'USD',
-                'balance_cents' => 10000,
+                'balance_cents' => $initialBalance,
                 'bonus_balance_cents' => 0,
                 'locked_balance_cents' => 0,
             ]
         );
 
         $seed = $request->query('seed') ?: bin2hex(random_bytes(32));
-        $stakeCents = (int) ($request->query('stake') ?: 5000);
-        $potCents = $stakeCents * 2;
-        $matchUuid = $request->query('match') ?: (string) Str::uuid();
 
-        // Generate temporary API token for real-time WebSocket and telemetry submissions
-        $apiToken = $user->createToken('cyber-arena-token')->plainTextToken;
+        // Delete previous session tokens to prevent token table accumulation
+        $user->tokens()->where('name', 'cyber-arena-session')->delete();
+        $apiToken = $user->createToken('cyber-arena-session')->plainTextToken;
 
         return view('game', [
             'user' => $user,
             'wallet' => $wallet,
             'seed' => $seed,
-            'stakeCents' => $stakeCents,
-            'potCents' => $potCents,
-            'matchUuid' => $matchUuid,
+            'stakeCents' => 0,
+            'potCents' => 0,
+            'matchUuid' => null,
+            'isPractice' => true,
             'apiToken' => $apiToken,
         ]);
     })->name('game.play');
+
+    // Authoritative Paid Duel Runner (Auth Required - Validated against Match Record)
+    Route::get('/duels/{uuid}/play', function (string $uuid, Request $request) {
+        /** @var User $user */
+        $user = $request->user();
+
+        /** @var MatchGame $match */
+        $match = MatchGame::where('uuid', $uuid)->firstOrFail();
+
+        // Verify caller is a verified participant in this match
+        if ($match->creator_user_id !== $user->id && $match->opponent_user_id !== $user->id) {
+            abort(403, 'Unauthorized: You are not a participant in this duel.');
+        }
+
+        // Verify match is in a playable state
+        $playableStates = [
+            MatchStatus::WaitingForOpponent,
+            MatchStatus::InProgress,
+            MatchStatus::Ready,
+        ];
+        if (! in_array($match->status, $playableStates, true)) {
+            return redirect()->route('dashboard')->withErrors([
+                'error' => 'This duel has concluded and is no longer playable.',
+            ]);
+        }
+
+        $initialBalance = config('duels.demo_mode', false) ? 10000 : 0;
+        $wallet = $user->wallet ?: Wallet::firstOrCreate(
+            ['user_id' => $user->id],
+            [
+                'currency' => 'USD',
+                'balance_cents' => $initialBalance,
+                'bonus_balance_cents' => 0,
+                'locked_balance_cents' => 0,
+            ]
+        );
+
+        // Delete old session tokens to maintain exactly 1 active token per user
+        $user->tokens()->where('name', 'cyber-arena-session')->delete();
+        $apiToken = $user->createToken('cyber-arena-session')->plainTextToken;
+
+        return view('game', [
+            'user' => $user,
+            'wallet' => $wallet,
+            'seed' => $match->game_seed,
+            'stakeCents' => $match->stake_amount_cents,
+            'potCents' => $match->stake_amount_cents * 2,
+            'matchUuid' => $match->uuid,
+            'isPractice' => false,
+            'apiToken' => $apiToken,
+        ]);
+    })->name('duels.play');
 });

@@ -9,6 +9,7 @@ use App\Models\DuelRun;
 use App\Models\MatchGame;
 use App\Models\User;
 use App\Services\AntiCheat\RunAuditService;
+use App\Services\AntiCheat\RunSimulator;
 use Database\Seeders\LedgerAccountSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -89,16 +90,23 @@ class AntiCheatAuditTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $ticks = 1800; // 30 seconds
+        $startRes = $this->postJson("/api/v1/duels/matches/{$match->uuid}/start-run");
+        $ticketToken = $startRes->json('ticket_token');
+
+        // Allow temporal integrity check to pass so score kinematic anomaly is isolated
+        $run = DuelRun::where('match_id', $match->id)->where('user_id', $user->id)->first();
+        $run->started_at = now()->subSeconds(3);
+        $run->save();
+
+        $ticks = 120; // 2 seconds
         $tamperedScore = 999999; // Cheater tries submitting 999,999 points
-        $inputs = [
-            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4, 'z' => 22.0],
-        ];
+        $inputs = [];
 
         // Submit with tamperedScore
         $response = $this->postJson("/api/v1/duels/matches/{$match->uuid}/submit-run", [
+            'ticket_token' => $ticketToken,
             'ticks_elapsed' => $ticks,
-            'final_distance' => 670.00,
+            'final_distance' => 40.00,
             'final_score' => $tamperedScore,
             'inputs' => $inputs,
         ]);
@@ -132,16 +140,19 @@ class AntiCheatAuditTest extends TestCase
 
         Sanctum::actingAs($user);
 
-        $ticks = 1200; // 20s
-        $score = 2400;
-        $inputs = [
-            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4, 'z' => 22.0],
-        ];
+        $startRes = $this->postJson("/api/v1/duels/matches/{$match->uuid}/start-run");
+        $ticketToken = $startRes->json('ticket_token');
+
+        $ticks = 120;
+        $inputs = [];
+        $simulator = new RunSimulator;
+        $sim = $simulator->simulate($match->game_seed, $inputs, $ticks);
 
         $response = $this->postJson("/api/v1/duels/matches/{$match->uuid}/submit-run", [
+            'ticket_token' => $ticketToken,
             'ticks_elapsed' => $ticks,
-            'final_distance' => 450.00,
-            'final_score' => $score,
+            'final_distance' => $sim['authoritative_distance'],
+            'final_score' => $sim['authoritative_score'],
             'inputs' => $inputs,
         ]);
 

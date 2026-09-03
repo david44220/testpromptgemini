@@ -26,6 +26,12 @@ class RunAuditService
 
     public const int MIN_JUMP_DURATION_TICKS = 36; // Physics airtime curve limit
 
+    public function __construct(
+        protected ?RunSimulator $simulator = null
+    ) {
+        $this->simulator ??= new RunSimulator;
+    }
+
     /**
      * Executes the complete anti-cheat audit pipeline sequentially.
      *
@@ -42,55 +48,71 @@ class RunAuditService
     public function auditRun(DuelRun $run, array $payload): AuditResult
     {
         $match = $run->match;
-        $seed = $match->game_seed;
         $ticksElapsed = (int) $payload['ticks_elapsed'];
         $finalDistance = (float) $payload['final_distance'];
         $finalScore = (int) $payload['final_score'];
         $inputs = $payload['inputs'] ?? [];
         $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
 
-        // 1. Rule 1: Temporal Integrity
+        // 1. Rule 1: Temporal Integrity & Mandatory Started-At check
         $startedAt = $payload['started_at'] ?? $run->started_at;
         $submittedAt = $payload['submitted_at'] ?? $run->submitted_at ?? now();
 
-        if ($startedAt !== null && ! $this->verifyTemporalIntegrity($ticksElapsed, $startedAt, $submittedAt)) {
+        if ($startedAt === null) {
+            return AuditResult::failure('MISSING_START_TIMESTAMP', [
+                'message' => 'Run must be officially initiated via start-run before gameplay.',
+            ]);
+        }
+
+        if (! $this->verifyTemporalIntegrity($ticksElapsed, $startedAt, $submittedAt)) {
             return AuditResult::failure('SPEEDHACK_TEMPORAL_ANOMALY', [
                 'ticks_elapsed' => $ticksElapsed,
                 'real_duration_seconds' => $submittedAt->diffInMilliseconds($startedAt) / 1000.0,
             ]);
         }
 
-        // 2. Rule 2: Kinematic Simulation & Distance Verification
-        if (! $this->verifyKinematics($ticksElapsed, $finalDistance)) {
-            $simulated = $this->simulateKinematics($ticksElapsed)['simulated_distance'];
-
-            return AuditResult::failure('CHEATER_EXCESSIVE_DISTANCE', [
-                'submitted_distance' => $finalDistance,
-                'simulated_distance' => $simulated,
-                'delta' => abs($finalDistance - $simulated),
-            ]);
-        }
-
-        // 3. Rule 3: Kinematic Score Bound Verification
-        if (! $this->verifyScoreFeasibility($ticksElapsed, $finalScore, $finalDistance)) {
-            $simulated = $this->simulateKinematics($ticksElapsed)['simulated_score'];
-
-            return AuditResult::failure('SCORE_KINEMATIC_ANOMALY', [
-                'submitted_score' => $finalScore,
-                'simulated_distance_score' => $simulated,
-            ]);
-        }
-
-        // 4. Rule 4: Input Frequency & Track Coordinates Verification
+        // 2. Rule 2: Input Frequency & State Transitions
         $inputCheck = $this->verifyInputIntegrity($inputs, $ticksElapsed);
         if (! $inputCheck->passed) {
             return $inputCheck;
         }
 
+        // 3. Rule 3: Authoritative Physics, Collision & Collectible Replay
+        $sim = $this->simulator->simulate($match->game_seed, $inputs, $ticksElapsed);
+
+        // Check if simulation detected a lethal obstacle collision that client attempted to bypass
+        if ($sim['terminated_early'] && $ticksElapsed > $sim['ticks_simulated'] + 30) {
+            return AuditResult::failure('CHEATER_IGNORED_LETHAL_COLLISION', [
+                'collision_tick' => $sim['ticks_simulated'],
+                'claimed_ticks' => $ticksElapsed,
+                'reason' => $sim['termination_reason'],
+            ]);
+        }
+
+        // Authoritative score comparison: client cannot inflate score above authoritative simulation
+        if ($finalScore > $sim['authoritative_score'] + 150) {
+            return AuditResult::failure('SCORE_KINEMATIC_ANOMALY', [
+                'submitted_score' => $finalScore,
+                'authoritative_score' => $sim['authoritative_score'],
+            ]);
+        }
+
+        // Authoritative distance comparison
+        $distanceMargin = max(20.0, $sim['authoritative_distance'] * 0.12);
+        if (abs($finalDistance - $sim['authoritative_distance']) > $distanceMargin) {
+            return AuditResult::failure('CHEATER_EXCESSIVE_DISTANCE', [
+                'submitted_distance' => $finalDistance,
+                'authoritative_distance' => $sim['authoritative_distance'],
+                'delta' => abs($finalDistance - $sim['authoritative_distance']),
+            ]);
+        }
+
+        // Return authoritative results for settlement
         return AuditResult::success([
-            'ticks_elapsed' => $ticksElapsed,
-            'final_distance' => $finalDistance,
-            'final_score' => $finalScore,
+            'ticks_elapsed' => $sim['ticks_simulated'],
+            'final_distance' => $sim['authoritative_distance'],
+            'final_score' => $sim['authoritative_score'],
+            'coin_count' => $sim['coin_count'],
             'inputs_hash' => $inputsHash,
         ]);
     }
@@ -276,23 +298,5 @@ class RunAuditService
         }
 
         return AuditResult::success();
-    }
-
-    /**
-     * Rule 4: Cryptographic Signature Verification
-     * Client computes: HMAC_SHA256(seed + ":" + final_score + ":" + ticks_elapsed + ":" + inputs_hash, session_secret)
-     */
-    public function verifyCryptographicSignature(
-        string $seed,
-        int $finalScore,
-        int $ticksElapsed,
-        string $inputsHash,
-        string $sessionSecret,
-        string $clientSignature
-    ): bool {
-        $message = "{$seed}:{$finalScore}:{$ticksElapsed}:{$inputsHash}";
-        $expectedSignature = hash_hmac('sha256', $message, $sessionSecret);
-
-        return hash_equals($expectedSignature, $clientSignature);
     }
 }

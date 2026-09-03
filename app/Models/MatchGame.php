@@ -21,10 +21,15 @@ use Illuminate\Support\Str;
     'opponent_user_id',
     'stake_amount_cents',
     'rake_percentage',
+    'rake_bps',
     'total_pot_cents',
     'platform_fee_cents',
     'winner_payout_cents',
     'status',
+    'in_progress_at',
+    'abandon_deadline_at',
+    'first_run_submitted_at',
+    'forfeit_deadline_at',
     'winner_user_id',
     'game_seed',
     'settled_at',
@@ -46,6 +51,18 @@ class MatchGame extends Model
             if (empty($match->game_seed)) {
                 $match->game_seed = bin2hex(random_bytes(32));
             }
+
+            if (empty($match->rake_bps)) {
+                if (! empty($match->rake_percentage)) {
+                    $match->rake_bps = (int) round(((float) $match->rake_percentage) * 100);
+                } else {
+                    $match->rake_bps = (int) config('duels.default_rake_bps', 1000);
+                }
+            }
+
+            if (empty($match->rake_percentage)) {
+                $match->rake_percentage = (string) number_format($match->rake_bps / 100, 2, '.', '');
+            }
         });
     }
 
@@ -58,11 +75,19 @@ class MatchGame extends Model
     {
         return [
             'status' => MatchStatus::class,
+            'creator_user_id' => 'integer',
+            'opponent_user_id' => 'integer',
+            'winner_user_id' => 'integer',
             'stake_amount_cents' => 'integer',
             'rake_percentage' => 'decimal:2',
+            'rake_bps' => 'integer',
             'total_pot_cents' => 'integer',
             'platform_fee_cents' => 'integer',
             'winner_payout_cents' => 'integer',
+            'in_progress_at' => 'datetime',
+            'abandon_deadline_at' => 'datetime',
+            'first_run_submitted_at' => 'datetime',
+            'forfeit_deadline_at' => 'datetime',
             'settled_at' => 'datetime',
         ];
     }

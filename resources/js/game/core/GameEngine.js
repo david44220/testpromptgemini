@@ -162,6 +162,15 @@ export class GameEngine {
     }
 
     /**
+     * Resets the simulation timing and tick counter to zero.
+     */
+    reset() {
+        this.tickCount = 0;
+        this.accumulator = 0;
+        this.lastTime = performance.now();
+    }
+
+    /**
      * Main animation loop decoupling fixed updates from rendering.
      * @param {number} currentTime
      */

@@ -105,6 +105,8 @@ class SecurityAndHardeningTest extends TestCase
      */
     public function test_login_as_demo_rejects_non_whitelisted_emails(): void
     {
+        config(['duels.demo_mode' => true]);
+
         // Target an arbitrary user
         $victim = User::factory()->create(['email' => 'victim_ceo@bank.com']);
 
@@ -117,10 +119,12 @@ class SecurityAndHardeningTest extends TestCase
     }
 
     /**
-     * Test loginAsDemo succeeds for authorized demo accounts.
+     * Test loginAsDemo succeeds for authorized demo accounts when demo_mode is enabled.
      */
     public function test_login_as_demo_accepts_whitelisted_demo_accounts(): void
     {
+        config(['duels.demo_mode' => true]);
+
         $demoUser = User::factory()->create(['email' => 'apex@cyber-rail.gg']);
 
         $response = $this->post('/login/demo', [
@@ -136,6 +140,8 @@ class SecurityAndHardeningTest extends TestCase
      */
     public function test_dashboard_deposit_creates_double_entry_ledger_records(): void
     {
+        config(['duels.demo_mode' => true]);
+
         /** @var User $user */
         $user = User::factory()->create();
         $wallet = Wallet::factory()->create([

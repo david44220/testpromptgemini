@@ -1,4 +1,4 @@
-﻿/**
+/**
  * RecorderSystem.js - Frame-accurate Action & Tick Recording Stream.
  * Produces an exportable, tamper-evident anti-cheat audit trail JSON payload
  * containing simulation ticks, player inputs, and state snapshots for server verification.
@@ -32,6 +32,16 @@ export class RecorderSystem {
         if (newSeed) {
             this.gameSeed = newSeed;
         }
+        this.startTime = Date.now();
+        this.endTime = 0;
+        this.actionLog.length = 0;
+        this.checkpoints.length = 0;
+    }
+
+    /**
+     * Resets recording logs.
+     */
+    reset() {
         this.startTime = Date.now();
         this.endTime = 0;
         this.actionLog.length = 0;

@@ -24,7 +24,8 @@ class CreateLobbyRequest extends FormRequest
         return [
             'stake_amount_cents' => ['required', 'integer', 'min:100'],
             'currency' => ['nullable', 'string', 'size:3'],
-            'rake_percentage' => ['nullable', 'numeric', 'min:0', 'max:25'],
+            'rake_percentage' => ['prohibited'],
+            'rake_bps' => ['prohibited'],
         ];
     }
 }

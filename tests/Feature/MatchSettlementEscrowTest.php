@@ -192,7 +192,7 @@ class MatchSettlementEscrowTest extends TestCase
     }
 
     /**
-     * Test that settling an already completed match throws InvalidMatchStateException.
+     * Test that settling an invalid match state (e.g. Cancelled) throws InvalidMatchStateException.
      */
     public function test_settle_match_rejects_already_completed_match(): void
     {
@@ -210,7 +210,7 @@ class MatchSettlementEscrowTest extends TestCase
             'creator_user_id' => $creator->id,
             'opponent_user_id' => $opponent->id,
             'stake_amount_cents' => $stake,
-            'status' => MatchStatus::Completed,
+            'status' => MatchStatus::Cancelled,
         ]);
 
         $this->expectException(InvalidMatchStateException::class);

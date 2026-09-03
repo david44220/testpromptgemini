@@ -22,6 +22,7 @@ class SubmitRunPayloadRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'ticket_token' => ['required', 'string', 'min:32', 'max:128'],
             'ticks_elapsed' => ['required', 'integer', 'min:1'],
             'final_distance' => ['required', 'numeric', 'min:0'],
             'final_score' => ['required', 'integer', 'min:0'],
@@ -32,7 +33,6 @@ class SubmitRunPayloadRequest extends FormRequest
             'inputs.*.z' => ['required', 'numeric'],
             'inputs.*.y' => ['nullable', 'numeric'],
             'inputs.*.timestamp' => ['nullable', 'numeric'],
-            'signature' => ['nullable', 'string', 'max:128'],
         ];
     }
 }

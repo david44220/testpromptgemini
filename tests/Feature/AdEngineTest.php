@@ -95,6 +95,7 @@ class AdEngineTest extends TestCase
 
         $response = $this->postJson('/api/v1/ads/rewarded-complete', [
             'creative_id' => 'rewarded-sponsor-clip',
+            'provider_event_id' => 'test_verified_event_ad12345',
         ]);
 
         $response->assertStatus(200)

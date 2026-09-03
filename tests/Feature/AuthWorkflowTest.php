@@ -18,6 +18,7 @@ class AuthWorkflowTest extends TestCase
     {
         parent::setUp();
         $this->seed(LedgerAccountSeeder::class);
+        config(['duels.demo_mode' => true]);
     }
 
     /**

@@ -1,4 +1,4 @@
-﻿import * as THREE from 'three';
+import * as THREE from 'three';
 
 /**
  * BillboardMesh.js - In-Game 3D Trackside Dynamic Billboard.
@@ -23,6 +23,7 @@ export class BillboardMesh {
         this.creative = null;
         this.hasRecordedImpression = false;
         this.isActive = false;
+        this.ownedTexture = null;
 
         // Custom CRT Scanline Shader Material
         this.screenMaterial = this._createShaderMaterial();
@@ -182,16 +183,23 @@ export class BillboardMesh {
         // Angle billboard slightly towards track center for optimal visibility
         this.group.rotation.y = x > 0 ? -0.22 : 0.22;
 
+        // Safely dispose previous texture before creating a new one to prevent GPU memory leak
+        if (this.ownedTexture) {
+            this.ownedTexture.dispose();
+            this.ownedTexture = null;
+        }
+
         // Apply creative colors
         if (this.creative.accent_color) {
             const color = new THREE.Color(this.creative.accent_color);
             this.screenMaterial.uniforms.uGlowColor.value = color;
             this.neonStripMat.color = color;
-            this.screenMaterial.uniforms.uTexture.value = this._createFallbackTexture(
+            this.ownedTexture = this._createFallbackTexture(
                 this.creative.title || 'SPONSOR',
                 this.creative.tagline || 'OFFICIAL PARTNER',
                 this.creative.accent_color
             );
+            this.screenMaterial.uniforms.uTexture.value = this.ownedTexture;
         }
 
         this.group.visible = true;
@@ -234,6 +242,10 @@ export class BillboardMesh {
     destroy() {
         if (this.group.parent) {
             this.group.parent.remove(this.group);
+        }
+        if (this.ownedTexture) {
+            this.ownedTexture.dispose();
+            this.ownedTexture = null;
         }
         this.screenMaterial.dispose();
     }

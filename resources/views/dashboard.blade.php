@@ -61,6 +61,7 @@
                 <h2 class="text-xl font-black text-white uppercase italic tracking-tight flex items-center gap-2">
                     VAULT BALANCES & ESCROW
                 </h2>
+                @if(config('duels.demo_mode', false))
                 <button 
                     type="button" 
                     onclick="document.getElementById('deposit-modal').classList.remove('hidden');" 
@@ -68,6 +69,7 @@
                 >
                     + DEPOSIT FUNDS
                 </button>
+                @endif
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -185,20 +187,28 @@
                     <div class="flex flex-col sm:flex-row items-center gap-4 pt-2">
                         <button 
                             type="submit" 
+                            id="instant-duel-submit-btn"
                             class="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gold-metallic text-black font-mono font-black text-sm uppercase tracking-wider shadow-gold-glow hover:scale-[1.02] transition-transform flex items-center justify-center gap-2 cursor-pointer"
                         >
                             <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
-                            ENTER 3D ARENA NOW
+                            CREATE DUEL & ENTER ARENA
                         </button>
+
+                        <a 
+                            href="/game" 
+                            class="w-full sm:w-auto px-6 py-4 rounded-2xl bg-white/5 border border-white/15 hover:border-white/30 text-slate-300 hover:text-white font-mono font-bold text-xs uppercase tracking-wider text-center transition-all cursor-pointer"
+                        >
+                            SOLO PRACTICE (FREE)
+                        </a>
 
                         <a 
                             href="/lobby" 
                             class="w-full sm:w-auto px-6 py-4 rounded-2xl bg-luxury-glass border border-white/15 hover:border-[#D4AF37] text-white font-mono font-bold text-xs uppercase tracking-wider text-center transition-all cursor-pointer"
                         >
-                            BROWSE MULTIPLAYER LOBBIES &rarr;
+                            BROWSE LOBBIES &rarr;
                         </a>
                     </div>
                 </form>
@@ -208,6 +218,9 @@
                 document.addEventListener('DOMContentLoaded', () => {
                     const buttons = document.querySelectorAll('.stake-tier-btn');
                     const stakeInput = document.getElementById('selected-stake-input');
+                    const duelForm = document.getElementById('instant-duel-form');
+                    const submitBtn = document.getElementById('instant-duel-submit-btn');
+
                     buttons.forEach(btn => {
                         btn.addEventListener('click', () => {
                             buttons.forEach(b => {
@@ -219,6 +232,40 @@
                             if (stakeInput) stakeInput.value = btn.dataset.stake;
                         });
                     });
+
+                    if (duelForm) {
+                        duelForm.addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            const stake = parseInt(stakeInput.value, 10);
+                            submitBtn.disabled = true;
+                            submitBtn.textContent = 'LOCKING ESCROW...';
+
+                            try {
+                                const res = await fetch('/api/v1/duels/lobbies', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Accept': 'application/json',
+                                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                                    },
+                                    body: JSON.stringify({ stake_amount_cents: stake })
+                                });
+
+                                const data = await res.json();
+                                if (res.ok && data.lobby?.uuid) {
+                                    window.location.href = `/duels/${data.lobby.uuid}/play`;
+                                } else {
+                                    alert(data.message || 'Failed to create duel arena.');
+                                    submitBtn.disabled = false;
+                                    submitBtn.textContent = 'CREATE DUEL & ENTER ARENA';
+                                }
+                            } catch (err) {
+                                alert('Network error while creating duel.');
+                                submitBtn.disabled = false;
+                                submitBtn.textContent = 'CREATE DUEL & ENTER ARENA';
+                            }
+                        });
+                    }
                 });
             </script>
         </section>
@@ -272,7 +319,7 @@
                             </div>
 
                             <a 
-                                href="/game?match={{ $match->uuid }}&seed={{ $match->game_seed }}&stake={{ $match->stake_amount_cents }}" 
+                                href="/duels/{{ $match->uuid }}/play" 
                                 class="block w-full py-2.5 text-center rounded-xl bg-gold-metallic text-black font-mono font-black text-xs uppercase tracking-wider shadow-gold-glow hover:scale-[1.01] transition-transform"
                             >
                                 ENTER ARENA (RESUME)
@@ -359,6 +406,7 @@
 
     </main>
 
+    @if(config('duels.demo_mode', false))
     <!-- Deposit Simulation Modal -->
     <div id="deposit-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md hidden">
         <div class="w-full max-w-md rounded-3xl bg-[#121316] border border-[#D4AF37]/40 shadow-gold-glow p-6 space-y-5">
@@ -399,6 +447,7 @@
             </form>
         </div>
     </div>
+    @endif
 
 </body>
 </html>

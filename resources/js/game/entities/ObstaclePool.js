@@ -11,11 +11,23 @@ import { TextureGenerator } from '../core/TextureGenerator.js';
 export class ObstaclePool {
     /**
      * @param {THREE.Scene} scene
-     * @param {string} [seed='']
+     * @param {PRNG|string} [gameplaySeedOrPrng='']
+     * @param {PRNG|null} [cosmeticPrng=null]
      */
-    constructor(scene, seed = '') {
+    constructor(scene, gameplaySeedOrPrng = '', cosmeticPrng = null) {
         this.scene = scene;
-        this.prng = new PRNG(seed);
+
+        if (gameplaySeedOrPrng instanceof PRNG) {
+            this.gameplayPrng = gameplaySeedOrPrng;
+            this.cosmeticPrng = cosmeticPrng || new PRNG((gameplaySeedOrPrng.getSeed() || '') + ':cosmetic');
+        } else {
+            const seedStr = typeof gameplaySeedOrPrng === 'string' ? gameplaySeedOrPrng : '';
+            this.gameplayPrng = new PRNG(seedStr ? seedStr + ':gameplay' : '');
+            this.cosmeticPrng = cosmeticPrng || new PRNG(seedStr ? seedStr + ':cosmetic' : '');
+        }
+
+        // Expose gameplayPrng as primary prng for backward compatibility
+        this.prng = this.gameplayPrng;
         this.LANE_WIDTH = 2.4;
 
         // Pool capacities
@@ -343,9 +355,9 @@ export class ObstaclePool {
             this._generateWave(z);
         }
 
-        // Spawn trackside billboard along lateral boundaries (x = ±6.0m)
-        if (this.prng.next() < 0.65) {
-            const side = this.prng.next() < 0.5 ? -6.0 : 6.0;
+        // Spawn trackside billboard along lateral boundaries (x = ±6.0m) using isolated cosmetic PRNG
+        if (this.cosmeticPrng.next() < 0.65) {
+            const side = this.cosmeticPrng.next() < 0.5 ? -6.0 : 6.0;
             this._spawnBillboard(side, startZ + length * 0.5);
         }
     }
@@ -558,7 +570,7 @@ export class ObstaclePool {
             const b = this.billboards[i];
             if (!b.isActive) {
                 const creative = this.creatives.length > 0
-                    ? this.creatives[this.prng.nextInt(0, this.creatives.length - 1)]
+                    ? this.creatives[this.cosmeticPrng.nextInt(0, this.creatives.length - 1)]
                     : null;
                 b.spawn(sideX, z, creative);
                 this.activeBillboards.push(b);

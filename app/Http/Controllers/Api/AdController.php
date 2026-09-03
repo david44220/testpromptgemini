@@ -54,13 +54,26 @@ class AdController extends Controller
 
         $validated = $request->validate([
             'creative_id' => ['required', 'string'],
+            'provider_event_id' => ['required', 'string', 'min:16', 'max:128'],
+            'verification_token' => ['nullable', 'string', 'max:256'],
         ]);
 
-        $reward = $this->adService->claimRewardedAd($user, $validated['creative_id']);
+        try {
+            $reward = $this->adService->claimRewardedAd(
+                $user,
+                $validated['creative_id'],
+                $validated['provider_event_id'],
+                $validated['verification_token'] ?? null
+            );
 
-        return response()->json([
-            'message' => 'Sponsor reward claimed successfully.',
-            'reward' => $reward,
-        ]);
+            return response()->json([
+                'message' => 'Sponsor reward claimed successfully.',
+                'reward' => $reward,
+            ]);
+        } catch (\DomainException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 }
