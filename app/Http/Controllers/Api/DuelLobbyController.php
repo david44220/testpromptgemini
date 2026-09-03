@@ -220,7 +220,6 @@ class DuelLobbyController extends Controller
 
         return response()->json([
             'ticket_token' => $run->ticket_token,
-            'session_secret' => $run->session_secret,
             'started_at' => $run->started_at->toISOString(),
             'game_seed' => $match->game_seed,
             'match_uuid' => $match->uuid,
@@ -229,7 +228,7 @@ class DuelLobbyController extends Controller
 
     /**
      * 5. POST /api/v1/duels/matches/{uuid}/submit-run
-     * Receives run payload, validates HMAC cryptographic signature, saves run, and queues verification.
+     * Receives run payload, validates deterministic kinematics, saves run, and queues verification.
      */
     public function submitRun(string $uuid, SubmitRunPayloadRequest $request): JsonResponse
     {
@@ -251,8 +250,8 @@ class DuelLobbyController extends Controller
         $ticks = (int) $validated['ticks_elapsed'];
         $score = (int) $validated['final_score'];
         $distance = (float) $validated['final_distance'];
-        $inputs = $validated['inputs'];
-        $signature = (string) $validated['signature'];
+        $inputs = $validated['inputs'] ?? [];
+        $signature = (string) ($validated['signature'] ?? '');
         $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
 
         return DB::transaction(function () use ($match, $user, $ticks, $score, $distance, $inputs, $signature, $inputsHash): JsonResponse {
@@ -270,23 +269,36 @@ class DuelLobbyController extends Controller
                 return response()->json(['message' => 'Run has already been submitted.'], 409);
             }
 
-            // Rule 4 Check: Cryptographic Signature Verification
-            $isValidSignature = $this->runAuditService->verifyCryptographicSignature(
-                $match->game_seed,
-                $score,
-                $ticks,
-                $inputsHash,
-                $run->session_secret,
-                $signature
-            );
+            // Server-side deterministic kinematic simulation and audit
+            $payload = [
+                'ticks_elapsed' => $ticks,
+                'final_distance' => $distance,
+                'final_score' => $score,
+                'inputs' => $inputs,
+                'signature' => $signature,
+                'started_at' => $run->started_at,
+                'submitted_at' => now(),
+            ];
 
-            if (! $isValidSignature) {
+            $auditResult = $this->runAuditService->auditRun($run, $payload);
+            if (! $auditResult->passed) {
+                $run->submitted_at = now();
+                $run->ticks_elapsed = $ticks;
+                $run->final_score = $score;
+                $run->final_distance = (string) $distance;
+                $run->inputs_hash = $inputsHash;
+                $run->input_log = $inputs;
+                $run->audit_status = AuditStatus::Failed;
+                $run->audit_failure_reason = $auditResult->failureReason;
+                $run->save();
+
                 return response()->json([
-                    'message' => 'Run rejected: Cryptographic signature verification failed.',
+                    'message' => "Run rejected: Anti-cheat audit failed ({$auditResult->failureReason}).",
+                    'failure_reason' => $auditResult->failureReason,
                 ], 403);
             }
 
-            // Store submitted run
+            // Store verified run
             $run->submitted_at = now();
             $run->ticks_elapsed = $ticks;
             $run->final_score = $score;
@@ -294,15 +306,17 @@ class DuelLobbyController extends Controller
             $run->inputs_hash = $inputsHash;
             $run->input_log = $inputs;
             $run->client_signature = $signature;
-            $run->audit_status = AuditStatus::Pending;
+            $run->audit_status = AuditStatus::Passed;
+            $run->audit_failure_reason = null;
             $run->save();
 
-            // Queue asynchronous settlement and audit job
+            // Queue asynchronous settlement job
             ProcessDuelSettlement::dispatch($match->id);
 
             return response()->json([
-                'message' => 'Run submitted successfully and queued for audit.',
-                'status' => 'QUEUED',
+                'message' => 'Run submitted successfully and verified.',
+                'status' => 'ACCEPTED',
+                'inputs_hash' => $inputsHash,
             ], 202);
         });
     }

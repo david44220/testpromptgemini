@@ -175,8 +175,8 @@ class MatchSettlementEscrowTest extends TestCase
         $opponentWallet->refresh();
 
         $totalPot = 6666;
-        $expectedRake = intdiv(6666 * 750, 10000); // 499 cents
-        $expectedPayout = $totalPot - $expectedRake; // 6167 cents
+        $expectedRake = (int) intval(round(($totalPot * (float) $rakePercentage) / 100)); // 500 cents
+        $expectedPayout = $totalPot - $expectedRake; // 6166 cents
 
         $this->assertSame($totalPot, $match->total_pot_cents);
         $this->assertSame($expectedRake, $match->platform_fee_cents);

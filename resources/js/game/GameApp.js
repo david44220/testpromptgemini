@@ -418,6 +418,29 @@ export class GameApp {
 
         this.lastExportPayload = payload;
 
+        // Automatically submit run payload for deterministic server-side audit
+        if (this.matchUuid) {
+            fetch(`/api/v1/duels/matches/${this.matchUuid}/submit-run`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+                },
+                body: JSON.stringify({
+                    ticks_elapsed: tick,
+                    final_distance: Math.floor(this.distance * 100) / 100,
+                    final_score: Math.floor(this.score),
+                    inputs: this.recorder.actionLog.map(act => ({
+                        tick: act.tick,
+                        action: act.action,
+                        x: act.x,
+                        z: act.z,
+                    })),
+                }),
+            }).catch(() => {});
+        }
+
         // Post-Match Settlement Modal
         const postModal = document.getElementById('post-match-modal');
         if (postModal) {

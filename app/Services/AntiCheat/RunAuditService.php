@@ -10,13 +10,15 @@ use Carbon\CarbonInterface;
 class RunAuditService
 {
     /**
-     * Physics and kinematic constraints.
+     * Physics and kinematic constraints aligned with Player.js.
      */
-    public const float MIN_START_SPEED = 18.0; // m/s
+    public const float MIN_START_SPEED = 22.0; // m/s
 
-    public const float MAX_TERMINAL_SPEED = 38.0; // m/s
+    public const float MAX_TERMINAL_SPEED = 46.0; // m/s
 
-    public const float KINEMATIC_TOLERANCE_MULTIPLIER = 1.02; // +2% buffer
+    public const float SPEED_ACCELERATION = 0.08; // m/s^2
+
+    public const float KINEMATIC_TOLERANCE_MULTIPLIER = 1.15; // ±15% buffer
 
     public const float MAX_TEMPORAL_DELTA_SECONDS = 2.5; // ±2.5s network latency margin
 
@@ -32,7 +34,7 @@ class RunAuditService
      *     final_distance: float,
      *     final_score: int,
      *     inputs: array<int, array<string, mixed>>,
-     *     signature: string,
+     *     signature?: string|null,
      *     started_at?: CarbonInterface|null,
      *     submitted_at?: CarbonInterface|null,
      * } $payload
@@ -45,17 +47,9 @@ class RunAuditService
         $finalDistance = (float) $payload['final_distance'];
         $finalScore = (int) $payload['final_score'];
         $inputs = $payload['inputs'] ?? [];
-        $signature = (string) $payload['signature'];
         $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
 
-        // 1. Rule 4: Cryptographic Signature Verification
-        if (! $this->verifyCryptographicSignature($seed, $finalScore, $ticksElapsed, $inputsHash, $run->session_secret, $signature)) {
-            return AuditResult::failure('INVALID_CRYPTOGRAPHIC_SIGNATURE', [
-                'expected_inputs_hash' => $inputsHash,
-            ]);
-        }
-
-        // 2. Rule 1: Temporal Integrity
+        // 1. Rule 1: Temporal Integrity
         $startedAt = $payload['started_at'] ?? $run->started_at;
         $submittedAt = $payload['submitted_at'] ?? $run->submitted_at ?? now();
 
@@ -66,16 +60,29 @@ class RunAuditService
             ]);
         }
 
-        // 3. Rule 2: Kinematic Feasibility (Distance vs. Time)
+        // 2. Rule 2: Kinematic Simulation & Distance Verification
         if (! $this->verifyKinematics($ticksElapsed, $finalDistance)) {
+            $simulated = $this->simulateKinematics($ticksElapsed)['simulated_distance'];
+
             return AuditResult::failure('CHEATER_EXCESSIVE_DISTANCE', [
                 'submitted_distance' => $finalDistance,
-                'theoretical_max' => $this->calculateTheoreticalMaxDistance($ticksElapsed),
+                'simulated_distance' => $simulated,
+                'delta' => abs($finalDistance - $simulated),
             ]);
         }
 
-        // 4. Rule 3: Input Frequency & State Transitions
-        $inputCheck = $this->verifyInputIntegrity($inputs);
+        // 3. Rule 3: Kinematic Score Bound Verification
+        if (! $this->verifyScoreFeasibility($ticksElapsed, $finalScore, $finalDistance)) {
+            $simulated = $this->simulateKinematics($ticksElapsed)['simulated_score'];
+
+            return AuditResult::failure('SCORE_KINEMATIC_ANOMALY', [
+                'submitted_score' => $finalScore,
+                'simulated_distance_score' => $simulated,
+            ]);
+        }
+
+        // 4. Rule 4: Input Frequency & Track Coordinates Verification
+        $inputCheck = $this->verifyInputIntegrity($inputs, $ticksElapsed);
         if (! $inputCheck->passed) {
             return $inputCheck;
         }
@@ -109,8 +116,8 @@ class RunAuditService
     }
 
     /**
-     * Rule 2: Kinematic Feasibility (Distance vs. Time)
-     * Speed is bounded between 18 m/s and 38 m/s.
+     * Rule 2: Kinematic Simulation & Distance Verification
+     * Verifies distance against forward kinematics integration with tolerance.
      */
     public function verifyKinematics(int $ticksElapsed, float $finalDistance): bool
     {
@@ -118,25 +125,80 @@ class RunAuditService
             return false;
         }
 
-        $theoreticalMax = $this->calculateTheoreticalMaxDistance($ticksElapsed);
+        $simulated = $this->simulateKinematics($ticksElapsed)['simulated_distance'];
+        $toleranceMargin = max(20.0, $simulated * 0.12); // 12% margin or 20m buffer
 
-        return $finalDistance <= ($theoreticalMax * self::KINEMATIC_TOLERANCE_MULTIPLIER);
+        return abs($finalDistance - $simulated) <= $toleranceMargin;
     }
 
     /**
-     * Calculates the upper bound integral of distance over elapsed ticks.
+     * Rule 3: Kinematic Score Feasibility Verification
+     * Validates that score does not exceed theoretical maximum of distance score + plausible coin pickups.
      */
-    public function calculateTheoreticalMaxDistance(int $ticksElapsed): float
+    public function verifyScoreFeasibility(int $ticksElapsed, int $finalScore, float $finalDistance): bool
     {
-        $durationSeconds = $ticksElapsed / 60.0;
+        if ($finalScore < 0) {
+            return false;
+        }
 
-        return self::MAX_TERMINAL_SPEED * $durationSeconds;
+        $simulated = $this->simulateKinematics($ticksElapsed);
+        $durationSeconds = $ticksElapsed / 60.0;
+        // Maximum plausible coins: ~4 coins per second (400 pts/sec) + simulated distance score + buffer
+        $maxAllowedScore = $simulated['simulated_score'] + (int) ceil($durationSeconds * 400.0) + 1000;
+
+        return $finalScore <= $maxAllowedScore;
     }
 
     /**
-     * Rule 3: Input Frequency & State Transitions
+     * Deterministically simulates runner forward kinematics at 60Hz.
+     *
+     * @return array{simulated_distance: float, simulated_score: int, terminal_speed: float}
      */
-    public function verifyInputIntegrity(array $inputs): AuditResult
+    public function simulateKinematics(int $ticksElapsed): array
+    {
+        $dt = 1.0 / 60.0;
+        $speed = self::MIN_START_SPEED;
+        $simDistance = 0.0;
+        $simScore = 0;
+
+        for ($i = 0; $i < $ticksElapsed; $i++) {
+            $simDistance += $speed * $dt;
+            if ($speed < self::MAX_TERMINAL_SPEED) {
+                $speed += self::SPEED_ACCELERATION * $dt;
+            }
+            $simScore += (int) floor($speed * $dt * 2.0);
+        }
+
+        return [
+            'simulated_distance' => $simDistance,
+            'simulated_score' => $simScore,
+            'terminal_speed' => $speed,
+        ];
+    }
+
+    /**
+     * Calculates simulated forward distance at an arbitrary tick.
+     */
+    public function simulateDistanceAtTick(int $tick): float
+    {
+        $dt = 1.0 / 60.0;
+        $speed = self::MIN_START_SPEED;
+        $dist = 0.0;
+
+        for ($i = 0; $i < $tick; $i++) {
+            $dist += $speed * $dt;
+            if ($speed < self::MAX_TERMINAL_SPEED) {
+                $speed += self::SPEED_ACCELERATION * $dt;
+            }
+        }
+
+        return $dist;
+    }
+
+    /**
+     * Rule 4: Input Frequency & State Transitions
+     */
+    public function verifyInputIntegrity(array $inputs, int $totalTicks = 0): AuditResult
     {
         $lastLaneSwitchTick = -9999;
         $lastJumpTick = -9999;
@@ -145,6 +207,13 @@ class RunAuditService
         foreach ($inputs as $log) {
             $tick = (int) ($log['tick'] ?? 0);
             $action = (string) ($log['action'] ?? '');
+
+            if ($tick < 0 || ($totalTicks > 0 && $tick > $totalTicks + 10)) {
+                return AuditResult::failure('CHEATER_INVALID_TICK', [
+                    'tick' => $tick,
+                    'total_ticks' => $totalTicks,
+                ]);
+            }
 
             if ($action === 'MOVE_LEFT' || $action === 'MOVE_RIGHT') {
                 // Minimum 7 ticks between lane shifts (120ms at 60Hz)
@@ -182,11 +251,25 @@ class RunAuditService
             // Check coordinate teleportation if x coordinates provided in log
             if (isset($log['x'])) {
                 $x = (float) $log['x'];
-                // Ensure coordinate matches allowable lanes (-2.4m, 0m, 2.4m ± 0.5m tolerance)
+                // Ensure coordinate matches allowable lanes (-2.4m, 0m, 2.4m ± 0.8m tolerance)
                 if (abs($x) > 3.2) {
                     return AuditResult::failure('CHEATER_LANE_TELEPORTATION', [
                         'tick' => $tick,
                         'x' => $x,
+                    ]);
+                }
+            }
+
+            // Check coordinate teleportation along Z forward track
+            if (isset($log['z'])) {
+                $z = (float) $log['z'];
+                $simulatedAtTick = $this->simulateDistanceAtTick($tick);
+                $zMargin = max(25.0, $simulatedAtTick * 0.20);
+                if (abs($z - $simulatedAtTick) > $zMargin) {
+                    return AuditResult::failure('CHEATER_COORDINATE_TELEPORTATION', [
+                        'tick' => $tick,
+                        'submitted_z' => $z,
+                        'simulated_z' => $simulatedAtTick,
                     ]);
                 }
             }

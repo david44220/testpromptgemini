@@ -108,4 +108,41 @@ class DoubleEntryLedgerBalanceTest extends TestCase
             "Global ledger sum mismatch: Debits = {$totalDebits}, Credits = {$totalCredits}."
         );
     }
+
+    /**
+     * Test Task 4: Odd-numbered pots with fractional rake strictly conserve integer balance without 1-cent drift.
+     */
+    public function test_odd_numbered_pot_rake_calculation_strictly_conserves_integer_balance(): void
+    {
+        /** @var User $userA */
+        $userA = User::factory()->create();
+        /** @var User $userB */
+        $userB = User::factory()->create();
+
+        $this->service->deposit($userA, 5000);
+        $this->service->deposit($userB, 5000);
+
+        // Odd stake amount: 1337 cents ($13.37), odd rake: 7.50%
+        $match = MatchGame::factory()->create([
+            'creator_user_id' => $userA->id,
+            'opponent_user_id' => $userB->id,
+            'stake_amount_cents' => 1337,
+            'rake_percentage' => '7.50',
+            'status' => MatchStatus::InProgress,
+        ]);
+
+        $this->service->lockStake($userA, $match);
+        $this->service->lockStake($userB, $match);
+
+        $this->service->settleMatch($match, $userA);
+
+        $match->refresh();
+        $this->assertSame(2674, $match->total_pot_cents);
+        $this->assertSame($match->total_pot_cents, $match->winner_payout_cents + $match->platform_fee_cents);
+
+        // Verify global ledger balance remains 100% in equilibrium
+        $totalDebits = (int) LedgerEntry::where('type', LedgerEntryType::Debit)->sum('amount_cents');
+        $totalCredits = (int) LedgerEntry::where('type', LedgerEntryType::Credit)->sum('amount_cents');
+        $this->assertSame($totalDebits, $totalCredits);
+    }
 }

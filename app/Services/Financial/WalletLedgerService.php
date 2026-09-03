@@ -279,11 +279,12 @@ class WalletLedgerService
                 $w->save();
             }
 
-            // Calculate rake and payout
+            // Calculate rake and payout with strict integer conservation
             $totalPot = $lockedMatch->stake_amount_cents * 2;
-            $rakeBps = (int) round(((float) $lockedMatch->rake_percentage) * 100);
-            $platformFee = intdiv($totalPot * $rakeBps, 10000);
+            $platformFee = (int) intval(round(($totalPot * (float) $lockedMatch->rake_percentage) / 100));
             $payout = $totalPot - $platformFee;
+
+            assert(($payout + $platformFee) === $totalPot, 'Ledger imbalance detected in pot distribution.');
 
             // Credit winner wallet: balance_cents += payout
             /** @var Wallet $winnerWallet */

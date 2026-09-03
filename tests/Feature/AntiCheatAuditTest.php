@@ -28,9 +28,9 @@ class AntiCheatAuditTest extends TestCase
     }
 
     /**
-     * Test POST /matches/{uuid}/start-run issues ticket token and session secret.
+     * Test POST /matches/{uuid}/start-run issues ticket token and DOES NOT expose session secret.
      */
-    public function test_start_run_issues_ticket_and_cryptographic_secret(): void
+    public function test_start_run_issues_ticket_and_does_not_expose_session_secret(): void
     {
         /** @var User $creator */
         $creator = User::factory()->create();
@@ -55,9 +55,9 @@ class AntiCheatAuditTest extends TestCase
         $response = $this->postJson("/api/v1/duels/matches/{$match->uuid}/start-run");
 
         $response->assertStatus(200)
+            ->assertJsonMissing(['session_secret'])
             ->assertJsonStructure([
                 'ticket_token',
-                'session_secret',
                 'started_at',
                 'game_seed',
                 'match_uuid',
@@ -65,9 +65,9 @@ class AntiCheatAuditTest extends TestCase
     }
 
     /**
-     * Test submission with modified final_score fails HMAC check with 403 Forbidden.
+     * Test submission with tampered final_score fails deterministic audit with 403 Forbidden.
      */
-    public function test_submission_with_modified_score_fails_hmac_check_with_403(): void
+    public function test_submission_with_tampered_score_fails_audit_with_403(): void
     {
         /** @var User $user */
         $user = User::factory()->create();
@@ -80,11 +80,9 @@ class AntiCheatAuditTest extends TestCase
             'status' => MatchStatus::InProgress,
         ]);
 
-        $sessionSecret = bin2hex(random_bytes(32));
         DuelRun::factory()->create([
             'match_id' => $match->id,
             'user_id' => $user->id,
-            'session_secret' => $sessionSecret,
             'started_at' => now()->subSeconds(30),
             'submitted_at' => null,
         ]);
@@ -92,31 +90,25 @@ class AntiCheatAuditTest extends TestCase
         Sanctum::actingAs($user);
 
         $ticks = 1800; // 30 seconds
-        $realScore = 1500;
         $tamperedScore = 999999; // Cheater tries submitting 999,999 points
         $inputs = [
-            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4],
+            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4, 'z' => 22.0],
         ];
-        $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
-
-        // Signature signed with original realScore (1500)
-        $signature = hash_hmac('sha256', "{$match->game_seed}:{$realScore}:{$ticks}:{$inputsHash}", $sessionSecret);
 
         // Submit with tamperedScore
         $response = $this->postJson("/api/v1/duels/matches/{$match->uuid}/submit-run", [
             'ticks_elapsed' => $ticks,
-            'final_distance' => 540.00,
+            'final_distance' => 670.00,
             'final_score' => $tamperedScore,
             'inputs' => $inputs,
-            'signature' => $signature,
         ]);
 
         $response->assertStatus(403)
-            ->assertJsonPath('message', 'Run rejected: Cryptographic signature verification failed.');
+            ->assertJsonPath('failure_reason', 'SCORE_KINEMATIC_ANOMALY');
     }
 
     /**
-     * Test submission with valid HMAC signature is accepted and queued (202).
+     * Test submission with valid kinematic progression is accepted and verified (202).
      */
     public function test_valid_submission_is_accepted_with_202(): void
     {
@@ -131,11 +123,9 @@ class AntiCheatAuditTest extends TestCase
             'status' => MatchStatus::InProgress,
         ]);
 
-        $sessionSecret = bin2hex(random_bytes(32));
         DuelRun::factory()->create([
             'match_id' => $match->id,
             'user_id' => $user->id,
-            'session_secret' => $sessionSecret,
             'started_at' => now()->subSeconds(20),
             'submitted_at' => null,
         ]);
@@ -145,21 +135,19 @@ class AntiCheatAuditTest extends TestCase
         $ticks = 1200; // 20s
         $score = 2400;
         $inputs = [
-            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4],
+            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 2.4, 'z' => 22.0],
         ];
-        $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
-        $signature = hash_hmac('sha256', "{$match->game_seed}:{$score}:{$ticks}:{$inputsHash}", $sessionSecret);
 
         $response = $this->postJson("/api/v1/duels/matches/{$match->uuid}/submit-run", [
             'ticks_elapsed' => $ticks,
-            'final_distance' => 420.00,
+            'final_distance' => 450.00,
             'final_score' => $score,
             'inputs' => $inputs,
-            'signature' => $signature,
         ]);
 
         $response->assertStatus(202)
-            ->assertJsonPath('status', 'QUEUED');
+            ->assertJsonPath('status', 'ACCEPTED')
+            ->assertJsonStructure(['inputs_hash']);
     }
 
     /**
@@ -219,5 +207,33 @@ class AntiCheatAuditTest extends TestCase
         $result = $this->auditService->verifyInputIntegrity($inputs);
         $this->assertFalse($result->passed);
         $this->assertSame('CHEATER_INVALID_JUMP_CURVE', $result->failureReason);
+    }
+
+    /**
+     * Test Rule 4: Input integrity rejects out-of-bounds lane teleportation.
+     */
+    public function test_input_integrity_rejects_lane_teleportation(): void
+    {
+        $inputs = [
+            ['tick' => 60, 'action' => 'MOVE_RIGHT', 'x' => 9.5], // Far beyond track edge (max 3.2)
+        ];
+
+        $result = $this->auditService->verifyInputIntegrity($inputs);
+        $this->assertFalse($result->passed);
+        $this->assertSame('CHEATER_LANE_TELEPORTATION', $result->failureReason);
+    }
+
+    /**
+     * Test Rule 4: Input integrity rejects forward coordinate teleportation along Z axis.
+     */
+    public function test_input_integrity_rejects_z_coordinate_teleportation(): void
+    {
+        $inputs = [
+            ['tick' => 10, 'action' => 'MOVE_LEFT', 'x' => -2.4, 'z' => 950.0], // Tick 10 is ~3.6m, not 950m!
+        ];
+
+        $result = $this->auditService->verifyInputIntegrity($inputs);
+        $this->assertFalse($result->passed);
+        $this->assertSame('CHEATER_COORDINATE_TELEPORTATION', $result->failureReason);
     }
 }

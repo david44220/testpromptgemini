@@ -28,11 +28,11 @@ class SubmitRunPayloadRequest extends FormRequest
             'inputs' => ['present', 'array', 'max:5000'],
             'inputs.*.tick' => ['required', 'integer', 'min:0'],
             'inputs.*.action' => ['required', 'string', 'in:MOVE_LEFT,MOVE_RIGHT,JUMP,ROLL'],
-            'inputs.*.x' => ['nullable', 'numeric'],
+            'inputs.*.x' => ['required', 'numeric'],
+            'inputs.*.z' => ['required', 'numeric'],
             'inputs.*.y' => ['nullable', 'numeric'],
-            'inputs.*.z' => ['nullable', 'numeric'],
             'inputs.*.timestamp' => ['nullable', 'numeric'],
-            'signature' => ['required', 'string', 'max:128'],
+            'signature' => ['nullable', 'string', 'max:128'],
         ];
     }
 }

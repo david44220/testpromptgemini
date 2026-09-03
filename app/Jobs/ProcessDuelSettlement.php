@@ -14,6 +14,7 @@ use App\Services\AntiCheat\RunAuditService;
 use App\Services\Financial\WalletLedgerService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Cache;
 
 class ProcessDuelSettlement implements ShouldQueue
 {
@@ -38,101 +39,111 @@ class ProcessDuelSettlement implements ShouldQueue
             return;
         }
 
-        // Only process matches that are in progress or ready
-        if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
-            return;
+        // Distributed atomic locking to eliminate concurrent worker collision
+        $lock = Cache::lock("match_settlement_{$match->uuid}", 15);
+        if (! $lock->get()) {
+            return; // Job already being handled by another worker
         }
 
-        /** @var User $creator */
-        $creator = $match->creator;
-        /** @var User $opponent */
-        $opponent = $match->opponent;
+        try {
+            // Re-check status under lock
+            if ($match->status !== MatchStatus::InProgress && $match->status !== MatchStatus::Ready) {
+                return;
+            }
 
-        $runs = $match->runs->keyBy('user_id');
-        /** @var DuelRun|null $creatorRun */
-        $creatorRun = $runs->get($creator->id);
-        /** @var DuelRun|null $opponentRun */
-        $opponentRun = $runs->get($opponent->id);
+            /** @var User $creator */
+            $creator = $match->creator;
+            /** @var User $opponent */
+            $opponent = $match->opponent;
 
-        $creatorSubmitted = $creatorRun?->submitted_at !== null;
-        $opponentSubmitted = $opponentRun?->submitted_at !== null;
+            $runs = $match->runs->keyBy('user_id');
+            /** @var DuelRun|null $creatorRun */
+            $creatorRun = $runs->get($creator->id);
+            /** @var DuelRun|null $opponentRun */
+            $opponentRun = $runs->get($opponent->id);
 
-        // 1. Timeout Forfeit Evaluation
-        if ($creatorSubmitted && ! $opponentSubmitted) {
-            $secondsSinceSubmission = abs(now()->diffInSeconds($creatorRun->submitted_at));
-            if ($secondsSinceSubmission >= self::FORFEIT_TIMEOUT_SECONDS) {
-                $this->resolveForfeitVictory($match, $creator, $opponent, $opponentRun, $ledgerService);
+            $creatorSubmitted = $creatorRun?->submitted_at !== null;
+            $opponentSubmitted = $opponentRun?->submitted_at !== null;
+
+            // 1. Timeout Forfeit Evaluation
+            if ($creatorSubmitted && ! $opponentSubmitted) {
+                $secondsSinceSubmission = abs(now()->diffInSeconds($creatorRun->submitted_at));
+                if ($secondsSinceSubmission >= self::FORFEIT_TIMEOUT_SECONDS) {
+                    $this->resolveForfeitVictory($match, $creator, $opponent, $opponentRun, $ledgerService);
+
+                    return;
+                }
 
                 return;
             }
 
-            return;
-        }
+            if ($opponentSubmitted && ! $creatorSubmitted) {
+                $secondsSinceSubmission = now()->diffInSeconds($opponentRun->submitted_at);
+                if ($secondsSinceSubmission >= self::FORFEIT_TIMEOUT_SECONDS) {
+                    $this->resolveForfeitVictory($match, $opponent, $creator, $creatorRun, $ledgerService);
 
-        if ($opponentSubmitted && ! $creatorSubmitted) {
-            $secondsSinceSubmission = now()->diffInSeconds($opponentRun->submitted_at);
-            if ($secondsSinceSubmission >= self::FORFEIT_TIMEOUT_SECONDS) {
-                $this->resolveForfeitVictory($match, $opponent, $creator, $creatorRun, $ledgerService);
+                    return;
+                }
 
                 return;
             }
 
-            return;
-        }
+            if (! $creatorSubmitted || ! $opponentSubmitted) {
+                return;
+            }
 
-        if (! $creatorSubmitted || ! $opponentSubmitted) {
-            return;
-        }
+            // 2. Anti-Cheat Audit Evaluation for both submitted runs
+            $this->ensureRunAudited($creatorRun, $auditService);
+            $this->ensureRunAudited($opponentRun, $auditService);
 
-        // 2. Anti-Cheat Audit Evaluation for both submitted runs
-        $this->ensureRunAudited($creatorRun, $auditService);
-        $this->ensureRunAudited($opponentRun, $auditService);
+            $creatorPassed = $creatorRun->audit_status === AuditStatus::Passed;
+            $opponentPassed = $opponentRun->audit_status === AuditStatus::Passed;
 
-        $creatorPassed = $creatorRun->audit_status === AuditStatus::Passed;
-        $opponentPassed = $opponentRun->audit_status === AuditStatus::Passed;
+            // One or both players failed audit
+            if (! $creatorPassed || ! $opponentPassed) {
+                if ($creatorPassed && ! $opponentPassed) {
+                    $ledgerService->refundHonestPlayerOnDispute(
+                        $match,
+                        $creator,
+                        $opponent,
+                        $opponentRun->audit_failure_reason ?? 'Opponent anti-cheat failure'
+                    );
+                    event(new DuelResolved($match, null, 'DISPUTED'));
 
-        // One or both players failed audit
-        if (! $creatorPassed || ! $opponentPassed) {
-            if ($creatorPassed && ! $opponentPassed) {
-                $ledgerService->refundHonestPlayerOnDispute(
-                    $match,
-                    $creator,
-                    $opponent,
-                    $opponentRun->audit_failure_reason ?? 'Opponent anti-cheat failure'
-                );
+                    return;
+                }
+
+                if ($opponentPassed && ! $creatorPassed) {
+                    $ledgerService->refundHonestPlayerOnDispute(
+                        $match,
+                        $opponent,
+                        $creator,
+                        $creatorRun->audit_failure_reason ?? 'Creator anti-cheat failure'
+                    );
+                    event(new DuelResolved($match, null, 'DISPUTED'));
+
+                    return;
+                }
+
+                // Both failed: cancel match & mark disputed
+                $match->status = MatchStatus::Disputed;
+                $match->save();
                 event(new DuelResolved($match, null, 'DISPUTED'));
 
                 return;
             }
 
-            if ($opponentPassed && ! $creatorPassed) {
-                $ledgerService->refundHonestPlayerOnDispute(
-                    $match,
-                    $opponent,
-                    $creator,
-                    $creatorRun->audit_failure_reason ?? 'Creator anti-cheat failure'
-                );
-                event(new DuelResolved($match, null, 'DISPUTED'));
+            // 3. Both passed audit cleanly: Determine Winner
+            $winner = $this->determineWinner($match, $creator, $opponent, $creatorRun, $opponentRun);
 
-                return;
-            }
+            // Execute atomic double-entry ledger settlement
+            $ledgerService->settleMatch($match, $winner);
 
-            // Both failed: cancel match & mark disputed
-            $match->status = MatchStatus::Disputed;
-            $match->save();
-            event(new DuelResolved($match, null, 'DISPUTED'));
-
-            return;
+            // Notify clients via WebSocket
+            event(new DuelResolved($match, $winner, 'VICTORY'));
+        } finally {
+            $lock->release();
         }
-
-        // 3. Both passed audit cleanly: Determine Winner
-        $winner = $this->determineWinner($match, $creator, $opponent, $creatorRun, $opponentRun);
-
-        // Execute atomic double-entry ledger settlement
-        $ledgerService->settleMatch($match, $winner);
-
-        // Notify clients via WebSocket
-        event(new DuelResolved($match, $winner, 'VICTORY'));
     }
 
     /**
