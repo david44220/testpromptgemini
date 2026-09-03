@@ -41,6 +41,30 @@ class MatchGame extends Model
 
     protected $table = 'matches';
 
+    /**
+     * The attributes that should be hidden for serialization.
+     * Raw game_seed is only revealed to authorized participants on start-run.
+     *
+     * @var list<string>
+     */
+    protected $hidden = [
+        'game_seed',
+    ];
+
+    /**
+     * The accessors to append to the model's array form.
+     *
+     * @var list<string>
+     */
+    protected $appends = [
+        'seed_commitment',
+    ];
+
+    public function getSeedCommitmentAttribute(): ?string
+    {
+        return $this->game_seed ? hash('sha256', $this->game_seed) : null;
+    }
+
     protected static function booted(): void
     {
         static::creating(function (MatchGame $match): void {

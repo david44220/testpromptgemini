@@ -51,6 +51,7 @@ Route::middleware('auth')->group(function () {
         return view('lobby', [
             'user' => $user,
             'wallet' => $wallet,
+            'demoMode' => config('duels.demo_mode', false),
         ]);
     })->name('duels.lobby');
 
@@ -71,10 +72,6 @@ Route::middleware('auth')->group(function () {
 
         $seed = $request->query('seed') ?: bin2hex(random_bytes(32));
 
-        // Delete previous session tokens to prevent token table accumulation
-        $user->tokens()->where('name', 'cyber-arena-session')->delete();
-        $apiToken = $user->createToken('cyber-arena-session')->plainTextToken;
-
         return view('game', [
             'user' => $user,
             'wallet' => $wallet,
@@ -83,7 +80,6 @@ Route::middleware('auth')->group(function () {
             'potCents' => 0,
             'matchUuid' => null,
             'isPractice' => true,
-            'apiToken' => $apiToken,
         ]);
     })->name('game.play');
 
@@ -123,10 +119,6 @@ Route::middleware('auth')->group(function () {
             ]
         );
 
-        // Delete old session tokens to maintain exactly 1 active token per user
-        $user->tokens()->where('name', 'cyber-arena-session')->delete();
-        $apiToken = $user->createToken('cyber-arena-session')->plainTextToken;
-
         return view('game', [
             'user' => $user,
             'wallet' => $wallet,
@@ -135,7 +127,6 @@ Route::middleware('auth')->group(function () {
             'potCents' => $match->stake_amount_cents * 2,
             'matchUuid' => $match->uuid,
             'isPractice' => false,
-            'apiToken' => $apiToken,
         ]);
     })->name('duels.play');
 });

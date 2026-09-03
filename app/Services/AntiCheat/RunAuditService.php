@@ -49,8 +49,6 @@ class RunAuditService
     {
         $match = $run->match;
         $ticksElapsed = (int) $payload['ticks_elapsed'];
-        $finalDistance = (float) $payload['final_distance'];
-        $finalScore = (int) $payload['final_score'];
         $inputs = $payload['inputs'] ?? [];
         $inputsHash = hash('sha256', json_encode($inputs, JSON_THROW_ON_ERROR));
 
@@ -89,22 +87,28 @@ class RunAuditService
             ]);
         }
 
-        // Authoritative score comparison: client cannot inflate score above authoritative simulation
-        if ($finalScore > $sim['authoritative_score'] + 150) {
-            return AuditResult::failure('SCORE_KINEMATIC_ANOMALY', [
-                'submitted_score' => $finalScore,
-                'authoritative_score' => $sim['authoritative_score'],
-            ]);
+        // Authoritative score comparison if client reported diagnostic score
+        if (isset($payload['final_score'])) {
+            $finalScore = (int) $payload['final_score'];
+            if ($finalScore > $sim['authoritative_score'] + 150) {
+                return AuditResult::failure('SCORE_KINEMATIC_ANOMALY', [
+                    'submitted_score' => $finalScore,
+                    'authoritative_score' => $sim['authoritative_score'],
+                ]);
+            }
         }
 
-        // Authoritative distance comparison
-        $distanceMargin = max(20.0, $sim['authoritative_distance'] * 0.12);
-        if (abs($finalDistance - $sim['authoritative_distance']) > $distanceMargin) {
-            return AuditResult::failure('CHEATER_EXCESSIVE_DISTANCE', [
-                'submitted_distance' => $finalDistance,
-                'authoritative_distance' => $sim['authoritative_distance'],
-                'delta' => abs($finalDistance - $sim['authoritative_distance']),
-            ]);
+        // Authoritative distance comparison if client reported diagnostic distance
+        if (isset($payload['final_distance'])) {
+            $finalDistance = (float) $payload['final_distance'];
+            $distanceMargin = max(20.0, $sim['authoritative_distance'] * 0.12);
+            if (abs($finalDistance - $sim['authoritative_distance']) > $distanceMargin) {
+                return AuditResult::failure('CHEATER_EXCESSIVE_DISTANCE', [
+                    'submitted_distance' => $finalDistance,
+                    'authoritative_distance' => $sim['authoritative_distance'],
+                    'delta' => abs($finalDistance - $sim['authoritative_distance']),
+                ]);
+            }
         }
 
         // Return authoritative results for settlement

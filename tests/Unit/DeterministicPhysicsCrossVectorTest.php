@@ -136,4 +136,69 @@ class DeterministicPhysicsCrossVectorTest extends TestCase
             $this->assertStringStartsWith('COLLISION_', $result['termination_reason']);
         }
     }
+
+    /**
+     * Test Task 4: Shared versioned determinism-v1.json fixture parity in PHP.
+     */
+    public function test_shared_fixture_determinism_v1_matches_php(): void
+    {
+        $fixturePath = dirname(__DIR__, 2).'/tests/fixtures/determinism-v1.json';
+        $this->assertFileExists($fixturePath);
+
+        $fixture = json_decode((string) file_get_contents($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertArrayHasKey('seeds', $fixture);
+
+        foreach ($fixture['seeds'] as $seed => $data) {
+            $prng = new DeterministicPrng($seed.':gameplay');
+            foreach ($data['prng_samples'] as $idx => $expectedSample) {
+                $this->assertEqualsWithDelta(
+                    $expectedSample,
+                    $prng->next(),
+                    1e-7,
+                    "PRNG sample mismatch in PHP for seed {$seed} at index {$idx}"
+                );
+            }
+
+            $trackGen = new TrackGenerator(new DeterministicPrng($seed.':gameplay'));
+            foreach ($data['segments'] as $segIdx => $expectedSeg) {
+                $actualSeg = $trackGen->generateSegment((float) $expectedSeg['start_z'], (float) $expectedSeg['length']);
+                $this->assertSame(count($expectedSeg['obstacles']), count($actualSeg['obstacles']), "Obstacle count mismatch for seed {$seed} at segment {$segIdx}");
+                $this->assertSame(count($expectedSeg['coins']), count($actualSeg['coins']), "Coin count mismatch for seed {$seed} at segment {$segIdx}");
+
+                foreach ($expectedSeg['obstacles'] as $oIdx => $expObs) {
+                    $actObs = $actualSeg['obstacles'][$oIdx];
+                    $this->assertSame($expObs['type'], $actObs['type']);
+                    $this->assertSame($expObs['lane'], $actObs['lane']);
+                    $this->assertEqualsWithDelta($expObs['x'], $actObs['x'], 1e-5);
+                    $this->assertEqualsWithDelta($expObs['z'], $actObs['z'], 1e-5);
+                }
+            }
+        }
+    }
+
+    /**
+     * Test Task 1.4: Explicit regression vectors for tick count semantics (1, 2, 100, 101 completed steps).
+     */
+    public function test_tick_semantics_regression_vectors(): void
+    {
+        $simulator = new RunSimulator;
+        $seed = 'tick_semantics_test_seed_1234567890abcdef1234567890abcdef';
+
+        foreach ([1, 2, 100, 101] as $completedSteps) {
+            $result = $simulator->simulate($seed, [], $completedSteps);
+            if (! $result['terminated_early']) {
+                $this->assertSame(
+                    $completedSteps,
+                    $result['ticks_simulated'],
+                    "Authoritative simulator must report exact completed simulation steps for input {$completedSteps}"
+                );
+            } else {
+                $this->assertLessThanOrEqual(
+                    $completedSteps,
+                    $result['ticks_simulated'],
+                    'Simulated ticks must not exceed submitted completed steps when terminated early'
+                );
+            }
+        }
+    }
 }

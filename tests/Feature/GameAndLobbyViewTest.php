@@ -68,7 +68,7 @@ class GameAndLobbyViewTest extends TestCase
             ->assertSee('CYBER-RAIL DUELS')
             ->assertSee('ACTIVE DUEL ARENAS')
             ->assertSee('Official Arena Sponsor')
-            ->assertSee('ACCEPT DUEL');
+            ->assertSee('CREATE HIGH-STAKES LOBBY');
     }
 
     /**
@@ -86,6 +86,6 @@ class GameAndLobbyViewTest extends TestCase
             ->assertSee('hud-pot')
             ->assertSee('post-match-modal')
             ->assertSee('modal-payout-amount')
-            ->assertSee('SPONSOR BOOST AVAILABLE');
+            ->assertSee('modal-rewarded-ad');
     }
 }

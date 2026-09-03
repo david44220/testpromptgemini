@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PRNG } from '../core/PRNG.js';
 import { BillboardMesh } from './BillboardMesh.js';
 import { TextureGenerator } from '../core/TextureGenerator.js';
+import { TrackGenerator } from '../determinism/TrackGenerator.js';
 
 /**
  * ObstaclePool.js - Pre-allocated, deterministic obstacle & collectible manager.
@@ -26,16 +27,16 @@ export class ObstaclePool {
             this.cosmeticPrng = cosmeticPrng || new PRNG(seedStr ? seedStr + ':cosmetic' : '');
         }
 
-        // Expose gameplayPrng as primary prng for backward compatibility
-        this.prng = this.gameplayPrng;
-        this.LANE_WIDTH = 2.4;
+        this.trackGenerator = new TrackGenerator(this.gameplayPrng);
+        this.LANE_WIDTH = TrackGenerator.LANE_WIDTH;
+        this.determinismFault = false;
 
-        // Pool capacities
-        this.HURDLE_COUNT = 8;
-        this.ARCHWAY_COUNT = 6;
-        this.TRAIN_COUNT = 6;
-        this.COIN_COUNT = 30;
-        this.BILLBOARD_COUNT = 6;
+        // Bounded pre-allocated capacities derived from active track horizon (10 segments x 2 waves)
+        this.HURDLE_COUNT = 64;
+        this.ARCHWAY_COUNT = 48;
+        this.TRAIN_COUNT = 24;
+        this.COIN_COUNT = 96;
+        this.BILLBOARD_COUNT = 12;
 
         // Pools
         this.hurdles = [];
@@ -340,6 +341,20 @@ export class ObstaclePool {
     }
 
     /**
+     * Atomically resets deterministic gameplay & cosmetic streams and reinitializes generator.
+     * @param {PRNG} gameplayPrng
+     * @param {PRNG|null} [cosmeticPrng=null]
+     */
+    resetDeterministicStreams(gameplayPrng, cosmeticPrng = null) {
+        this.gameplayPrng = gameplayPrng;
+        if (cosmeticPrng) {
+            this.cosmeticPrng = cosmeticPrng;
+        }
+        this.trackGenerator = new TrackGenerator(this.gameplayPrng);
+        this.determinismFault = false;
+    }
+
+    /**
      * Spawns obstacles deterministically along a recycled track segment.
      * Guaranteed Solvability: always leaves at least 1 viable escape route.
      * @param {number} startZ Start Z position of track segment
@@ -349,10 +364,14 @@ export class ObstaclePool {
         // Do not spawn obstacles in the first safety zone
         if (startZ < 30) return;
 
-        // Step through segment at interval intervals (e.g. 14 units)
-        const step = 15;
-        for (let z = startZ + 8; z < startZ + length - 5; z += step) {
-            this._generateWave(z);
+        const segmentData = this.trackGenerator.generateSegment(startZ, length);
+        for (let i = 0; i < segmentData.obstacles.length; i++) {
+            const obs = segmentData.obstacles[i];
+            this._spawnObstacle(obs.type, obs.lane, obs.z);
+        }
+        for (let i = 0; i < segmentData.coins.length; i++) {
+            const coin = segmentData.coins[i];
+            this._spawnCoin(coin.lane, coin.z);
         }
 
         // Spawn trackside billboard along lateral boundaries (x = ±6.0m) using isolated cosmetic PRNG
@@ -360,88 +379,6 @@ export class ObstaclePool {
             const side = this.cosmeticPrng.next() < 0.5 ? -6.0 : 6.0;
             this._spawnBillboard(side, startZ + length * 0.5);
         }
-    }
-
-    /**
-     * Generates a single wave across 3 lanes (-1, 0, 1) using PRNG.
-     * @private
-     * @param {number} z
-     */
-    _generateWave(z) {
-        const pattern = this.prng.nextInt(0, 5);
-        const lanes = [-1, 0, 1];
-
-        switch (pattern) {
-            case 0: {
-                // 1 Train in random lane, coins in other lanes
-                const trainLane = this.prng.choice(lanes);
-                this._spawnObstacle('TRAIN', trainLane, z);
-
-                const coinLane = trainLane === 0 ? this.prng.choice([-1, 1]) : 0;
-                this._spawnCoin(coinLane, z);
-                this._spawnCoin(coinLane, z + 2.5);
-                break;
-            }
-
-            case 1: {
-                // 1 Hurdle in lane A, 1 Archway in lane B, lane C open with coins
-                const shuffled = this._shuffleLanes();
-                this._spawnObstacle('HURDLE', shuffled[0], z);
-                this._spawnObstacle('ARCHWAY', shuffled[1], z);
-                this._spawnCoin(shuffled[2], z);
-                break;
-            }
-
-            case 2: {
-                // All 3 lanes have hurdles (Jumpable across all 3)
-                this._spawnObstacle('HURDLE', -1, z);
-                this._spawnObstacle('HURDLE', 0, z);
-                this._spawnObstacle('HURDLE', 1, z);
-                break;
-            }
-
-            case 3: {
-                // 2 Archways (Duckable) + Coins in center
-                const openLane = this.prng.choice(lanes);
-                for (const lane of lanes) {
-                    if (lane !== openLane) {
-                        this._spawnObstacle('ARCHWAY', lane, z);
-                    } else {
-                        this._spawnCoin(lane, z);
-                        this._spawnCoin(lane, z + 2.5);
-                    }
-                }
-                break;
-            }
-
-            case 4: {
-                // High-value Coin Trail (Arcade sprint)
-                const targetLane = this.prng.choice(lanes);
-                this._spawnCoin(targetLane, z - 2);
-                this._spawnCoin(targetLane, z);
-                this._spawnCoin(targetLane, z + 2);
-                break;
-            }
-
-            default: {
-                // Single hurdle or single archway
-                const lane = this.prng.choice(lanes);
-                const type = this.prng.boolean() ? 'HURDLE' : 'ARCHWAY';
-                this._spawnObstacle(type, lane, z);
-                break;
-            }
-        }
-    }
-
-    _shuffleLanes() {
-        const arr = [-1, 0, 1];
-        for (let i = arr.length - 1; i > 0; i--) {
-            const j = this.prng.nextInt(0, i);
-            const temp = arr[i];
-            arr[i] = arr[j];
-            arr[j] = temp;
-        }
-        return arr;
     }
 
     _spawnObstacle(type, lane, z) {
@@ -468,6 +405,14 @@ export class ObstaclePool {
                 return;
             }
         }
+
+        // Gameplay pool capacity exhausted - fail closed and log fault
+        this.determinismFault = true;
+        const msg = `[Determinism Fault] Pool exhausted for obstacle type: ${type} at z=${z}`;
+        if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
+            throw new Error(msg);
+        }
+        console.error(msg);
     }
 
     _spawnCoin(lane, z) {
@@ -491,6 +436,14 @@ export class ObstaclePool {
                 return;
             }
         }
+
+        // Gameplay coin pool capacity exhausted - fail closed and log fault
+        this.determinismFault = true;
+        const msg = `[Determinism Fault] Coin pool exhausted at z=${z}`;
+        if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
+            throw new Error(msg);
+        }
+        console.error(msg);
     }
 
     _updateObstacleBounds(item) {

@@ -134,7 +134,7 @@ class AntiCheatAuditTest extends TestCase
         DuelRun::factory()->create([
             'match_id' => $match->id,
             'user_id' => $user->id,
-            'started_at' => now()->subSeconds(20),
+            'started_at' => now()->subSeconds(2),
             'submitted_at' => null,
         ]);
 

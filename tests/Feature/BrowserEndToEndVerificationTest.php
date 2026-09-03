@@ -106,12 +106,13 @@ class BrowserEndToEndVerificationTest extends TestCase
                 ->assertSee('data-stake="5000"', false)
                 ->assertSee('data-pot="10000"', false)
                 ->assertSee("data-match=\"{$match->uuid}\"", false)
-                ->assertSee("data-seed=\"{$match->game_seed}\"", false);
+                ->assertDontSee("data-seed=\"{$match->game_seed}\"", false)
+                ->assertSee('data-commitment="'.hash('sha256', $match->game_seed).'"', false);
         }
 
-        // Must have at most 1 token for cyber-arena-session
-        $tokenCount = $creator->tokens()->where('name', 'cyber-arena-session')->count();
-        $this->assertSame(1, $tokenCount);
+        // Must not mint personal_access_tokens for web gameplay (session + CSRF auth)
+        $tokenCount = $creator->tokens()->count();
+        $this->assertSame(0, $tokenCount);
 
         // Stranger attempting to load duel route is rejected with 403
         $this->actingAs($stranger)

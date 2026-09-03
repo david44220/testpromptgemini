@@ -51,7 +51,7 @@
             </div>
 
             <!-- Rewarded Sponsor Ad Section -->
-            <div id="modal-rewarded-ad" class="p-4 rounded-xl bg-gradient-to-r from-[#121316] to-[#181a20] border border-[#00F0FF]/30 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div id="modal-rewarded-ad" class="p-4 rounded-xl bg-gradient-to-r from-[#121316] to-[#181a20] border border-[#00F0FF]/30 flex flex-col sm:flex-row items-center justify-between gap-3 {{ empty($rewardedAdsAvailable) ? 'opacity-50 pointer-events-none' : '' }}" data-available="{{ !empty($rewardedAdsAvailable) ? '1' : '0' }}">
                 <div class="flex items-center space-x-3">
                     <div class="w-8 h-8 rounded-lg bg-[#00F0FF]/20 border border-[#00F0FF]/40 flex items-center justify-center text-[#00F0FF] flex-shrink-0">
                         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -59,16 +59,17 @@
                         </svg>
                     </div>
                     <div>
-                        <div class="text-xs font-mono font-bold text-white">SPONSOR BOOST AVAILABLE</div>
-                        <div class="text-[11px] text-slate-400">Watch 15s clip to reduce platform rake to 8% on next duel</div>
+                        <div class="text-xs font-mono font-bold text-white">{{ !empty($rewardedAdsAvailable) ? 'SPONSOR BOOST AVAILABLE' : 'SPONSOR REWARDS UNAVAILABLE' }}</div>
+                        <div class="text-[11px] text-slate-400">{{ !empty($rewardedAdsAvailable) ? 'Watch 15s clip to reduce platform rake to 8% on next duel' : 'No ad sponsor provider configured for this environment' }}</div>
                     </div>
                 </div>
                 <button 
                     id="btn-watch-ad" 
                     type="button"
-                    class="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-[#00F0FF]/20 border border-[#00F0FF]/40 text-[#00F0FF] hover:bg-[#00F0FF] hover:text-black text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap"
+                    {{ empty($rewardedAdsAvailable) ? 'disabled' : '' }}
+                    class="w-full sm:w-auto px-3.5 py-2 rounded-lg {{ !empty($rewardedAdsAvailable) ? 'bg-[#00F0FF]/20 border border-[#00F0FF]/40 text-[#00F0FF] hover:bg-[#00F0FF] hover:text-black cursor-pointer' : 'bg-white/5 border border-white/10 text-slate-500 cursor-not-allowed' }} text-xs font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap"
                 >
-                    WATCH CLIP
+                    {{ !empty($rewardedAdsAvailable) ? 'WATCH CLIP' : 'UNAVAILABLE' }}
                 </button>
             </div>
 

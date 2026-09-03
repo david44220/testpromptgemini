@@ -16,6 +16,7 @@ Route::prefix('v1/duels')->middleware(['auth:sanctum', 'throttle:60,1'])->group(
     Route::post('/matches/{uuid}/start-run', [DuelLobbyController::class, 'startRun'])->name('duels.matches.start-run');
     Route::post('/matches/{uuid}/submit-run', [DuelLobbyController::class, 'submitRun'])->name('duels.matches.submit-run');
     Route::post('/matches/{uuid}/telemetry', [DuelLobbyController::class, 'broadcastTelemetry'])->name('duels.matches.telemetry');
+    Route::get('/matches/{uuid}/result', [DuelLobbyController::class, 'getResult'])->name('duels.matches.result');
 });
 
 Route::prefix('v1/ads')->group(function (): void {

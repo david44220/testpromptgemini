@@ -175,8 +175,8 @@ class MatchSettlementEscrowTest extends TestCase
         $opponentWallet->refresh();
 
         $totalPot = 6666;
-        $expectedRake = (int) intval(round(($totalPot * (float) $rakePercentage) / 100)); // 500 cents
-        $expectedPayout = $totalPot - $expectedRake; // 6166 cents
+        $expectedRake = intdiv($totalPot * 750, 10_000); // 499 cents (integer floor)
+        $expectedPayout = $totalPot - $expectedRake; // 6167 cents
 
         $this->assertSame($totalPot, $match->total_pot_cents);
         $this->assertSame($expectedRake, $match->platform_fee_cents);
@@ -215,5 +215,53 @@ class MatchSettlementEscrowTest extends TestCase
 
         $this->expectException(InvalidMatchStateException::class);
         $this->service->settleMatch($match, $creator);
+    }
+
+    /**
+     * Mandatory regression vector:
+     * stake = 1337 cents, pot = 2674 cents, rake = 750 bps -> platform fee = 200 cents, winner payout = 2474 cents.
+     */
+    public function test_exact_mandatory_regression_vector_rake_arithmetic(): void
+    {
+        $stake = 1337;
+        $rakeBps = 750;
+
+        /** @var User $creator */
+        $creator = User::factory()->create();
+        $creatorWallet = Wallet::factory()->create(['user_id' => $creator->id, 'balance_cents' => $stake, 'locked_balance_cents' => 0]);
+
+        /** @var User $opponent */
+        $opponent = User::factory()->create();
+        $opponentWallet = Wallet::factory()->create(['user_id' => $opponent->id, 'balance_cents' => $stake, 'locked_balance_cents' => 0]);
+
+        $match = MatchGame::factory()->create([
+            'creator_user_id' => $creator->id,
+            'opponent_user_id' => $opponent->id,
+            'stake_amount_cents' => $stake,
+            'rake_bps' => $rakeBps,
+            'status' => MatchStatus::Ready,
+        ]);
+
+        $this->service->lockStake($creator, $match);
+        $this->service->lockStake($opponent, $match);
+
+        $match->status = MatchStatus::InProgress;
+        $match->save();
+
+        $this->service->settleMatch($match, $creator);
+
+        $match->refresh();
+        $creatorWallet->refresh();
+        $opponentWallet->refresh();
+
+        // Exact regression assertions
+        $this->assertSame(2674, $match->total_pot_cents);
+        $this->assertSame(200, $match->platform_fee_cents);
+        $this->assertSame(2474, $match->winner_payout_cents);
+        $this->assertSame(2474, $creatorWallet->balance_cents);
+        $this->assertSame(0, $creatorWallet->locked_balance_cents);
+        $this->assertSame(0, $opponentWallet->balance_cents);
+        $this->assertSame(0, $opponentWallet->locked_balance_cents);
+        $this->assertSame(2674, $match->platform_fee_cents + $match->winner_payout_cents);
     }
 }

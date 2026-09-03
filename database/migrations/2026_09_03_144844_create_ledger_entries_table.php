@@ -14,8 +14,10 @@ return new class extends Migration
         Schema::create('ledger_entries', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->uuid('transaction_group_id')->index();
-            $table->foreignId('wallet_id')->nullable()->constrained('wallets')->nullOnDelete()->index();
-            $table->foreignId('ledger_account_id')->nullable()->constrained('ledger_accounts')->nullOnDelete()->index();
+            $table->foreignId('wallet_id')->nullable()->index();
+            $table->foreign('wallet_id', 'fk_ledger_entries_wallet')->references('id')->on('wallets')->nullOnDelete();
+            $table->foreignId('ledger_account_id')->nullable()->index();
+            $table->foreign('ledger_account_id', 'fk_ledger_entries_account')->references('id')->on('ledger_accounts')->nullOnDelete();
             $table->string('type');
             $table->unsignedBigInteger('amount_cents');
             $table->string('category');

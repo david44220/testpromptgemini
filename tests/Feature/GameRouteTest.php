@@ -41,7 +41,9 @@ class GameRouteTest extends TestCase
         $response->assertStatus(200);
         $response->assertSee('id="game-canvas"', false);
         $response->assertSee('data-seed=', false);
-        $response->assertSee('data-token=', false);
+        $response->assertDontSee('data-token=', false);
+        $response->assertSee('name="csrf-token"', false);
+        $this->assertSame(0, $user->tokens()->count(), 'Viewing /game must not mint personal_access_tokens.');
     }
 
     /**

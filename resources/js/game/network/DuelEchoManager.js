@@ -49,6 +49,10 @@ export class DuelEchoManager {
         const scheme = import.meta.env?.VITE_REVERB_SCHEME || 'http';
         const key = import.meta.env?.VITE_REVERB_APP_KEY || 'reverb_duel_key_antigravity';
 
+        const csrfToken = typeof document !== 'undefined'
+            ? document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+            : '';
+
         return new Echo({
             broadcaster: 'reverb',
             key: key,
@@ -57,10 +61,12 @@ export class DuelEchoManager {
             wssPort: port,
             forceTLS: scheme === 'https',
             enabledTransports: ['ws', 'wss'],
-            authEndpoint: '/api/v1/broadcasting/auth',
+            authEndpoint: '/broadcasting/auth',
             auth: {
                 headers: {
                     Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
             },
@@ -122,11 +128,17 @@ export class DuelEchoManager {
         this.lastTelemetrySendTime = performance.now();
 
         try {
+            const csrfToken = typeof document !== 'undefined'
+                ? document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                : '';
+
             await fetch(`/api/v1/duels/matches/${this.matchUuid}/telemetry`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
                 body: JSON.stringify({

@@ -155,10 +155,10 @@ export class TrackPool {
     }
 
     /**
-     * Resets track sequence starting from initial z offset.
-     * @param {number} [startZ=-20]
+     * Resets track sequence starting from initial canonical z offset.
+     * @param {number} [startZ=-30]
      */
-    reset(startZ = -20) {
+    reset(startZ = -30) {
         this.furthestZ = startZ;
         for (let i = 0; i < this.segmentCount; i++) {
             const segment = this.pool[i];
@@ -169,19 +169,20 @@ export class TrackPool {
 
     /**
      * Checks if segments have fallen behind camera and recycles them forward.
+     * Canonical recycle order: 270, 300, 330, 360...
      * @param {number} playerZ Current player position on Z axis
      * @param {Function} [onRecycleSegment] Callback invoked with (segmentZ, segmentLength)
      */
     update(playerZ, onRecycleSegment) {
-        const recycleThreshold = playerZ - this.segmentLength - 15;
+        const recycleThreshold = playerZ - this.segmentLength;
 
         for (let i = 0; i < this.segmentCount; i++) {
             const segment = this.pool[i];
 
             if (segment.position.z < recycleThreshold) {
                 // Shift this segment to the furthest position ahead
-                segment.position.z = this.furthestZ;
                 const newStartZ = this.furthestZ;
+                segment.position.z = newStartZ;
                 this.furthestZ += this.segmentLength;
 
                 if (onRecycleSegment) {

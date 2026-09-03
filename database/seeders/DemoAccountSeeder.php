@@ -99,7 +99,7 @@ class DemoAccountSeeder extends Seeder
         // Seed 2 active open matches in database
         if (isset($seededUsers[0], $seededUsers[1])) {
             MatchGame::firstOrCreate(
-                ['uuid' => 'demo-match-apex-50'],
+                ['uuid' => 'd0000000-0000-4000-a000-000000000001'],
                 [
                     'creator_user_id' => $seededUsers[0]['user']->id,
                     'opponent_user_id' => null,
@@ -114,7 +114,7 @@ class DemoAccountSeeder extends Seeder
             );
 
             MatchGame::firstOrCreate(
-                ['uuid' => 'demo-match-viper-25'],
+                ['uuid' => 'd0000000-0000-4000-a000-000000000002'],
                 [
                     'creator_user_id' => $seededUsers[1]['user']->id,
                     'opponent_user_id' => null,

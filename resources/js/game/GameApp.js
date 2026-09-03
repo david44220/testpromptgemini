@@ -105,7 +105,7 @@ export class GameApp {
     }
 
     _prepopulateTrack() {
-        this.trackPool.reset(-20);
+        this.trackPool.reset(-30);
         this.obstaclePool.reset();
 
         // Populate initial obstacles ahead of player
@@ -168,12 +168,18 @@ export class GameApp {
             this.isStarting = true;
             if (bannerSub) bannerSub.textContent = 'CONNECTING TO AUTHORITATIVE NEURAL ARENA...';
 
+            const csrfToken = typeof document !== 'undefined'
+                ? document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+                : '';
+
             try {
                 const res = await fetch(`/api/v1/duels/matches/${this.matchUuid}/start-run`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         Accept: 'application/json',
+                        'X-CSRF-TOKEN': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
                         ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                     },
                 });
@@ -224,8 +230,7 @@ export class GameApp {
         this.gameSeed = seed;
         this.gameplayPrng = new PRNG(this.gameSeed + ':gameplay');
         this.cosmeticPrng = new PRNG(this.gameSeed + ':cosmetic');
-        this.obstaclePool.gameplayPrng = this.gameplayPrng;
-        this.obstaclePool.cosmeticPrng = this.cosmeticPrng;
+        this.obstaclePool.resetDeterministicStreams(this.gameplayPrng, this.cosmeticPrng);
 
         this.score = 0;
         this.coins = 0;
@@ -472,6 +477,10 @@ export class GameApp {
 
         this.lastExportPayload = payload;
 
+        const csrfToken = typeof document !== 'undefined'
+            ? document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+            : '';
+
         // Automatically submit run payload with single-use ticket token for deterministic server-side audit
         if (this.matchUuid && this.ticketToken) {
             const tokenToSubmit = this.ticketToken;
@@ -482,6 +491,8 @@ export class GameApp {
                 headers: {
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
                     ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
                 body: JSON.stringify({
@@ -492,21 +503,14 @@ export class GameApp {
                     inputs: this.recorder.actionLog.map(act => ({
                         tick: act.tick,
                         action: act.action,
-                        x: act.x,
-                        z: act.z,
                     })),
                 }),
             }).catch(() => {});
         }
 
-        // Post-Match Settlement Modal
+        // Post-Match Settlement Modal (Authoritative Flow)
         const postModal = document.getElementById('post-match-modal');
         if (postModal) {
-            const isVictory = this.distance >= this.opponentDistance;
-            const potCents = Number(this.canvas?.dataset?.pot) || 10000;
-            const rakeCents = Math.floor(potCents * 0.10);
-            const netWinningsCents = potCents - rakeCents;
-
             const titleEl = postModal.querySelector('#modal-title');
             const statusBadge = postModal.querySelector('#modal-status-badge');
             const payoutEl = postModal.querySelector('#modal-payout-amount');
@@ -517,56 +521,76 @@ export class GameApp {
             const rivalDistEl = postModal.querySelector('#modal-rival-distance');
             const rivalScoreEl = postModal.querySelector('#modal-rival-score');
 
-            if (titleEl) {
-                titleEl.textContent = isVictory ? 'VICTORY!' : 'DEFEAT';
-                titleEl.className = isVictory
-                    ? 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-white uppercase italic'
-                    : 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-red-500 uppercase italic';
-            }
-
-            if (statusBadge) {
-                statusBadge.textContent = isVictory ? 'WINNER DECLARED' : 'DUEL CONCLUDED';
-            }
-
-            if (grossEl) grossEl.textContent = `$${(potCents / 100).toFixed(2)}`;
-            if (rakeEl) rakeEl.textContent = `$${(rakeCents / 100).toFixed(2)}`;
             if (yourDistEl) yourDistEl.textContent = `${Math.floor(this.distance)} m`;
             if (yourScoreEl) yourScoreEl.textContent = `${Math.floor(this.score)} PTS`;
-            if (rivalDistEl) rivalDistEl.textContent = `${Math.floor(this.opponentDistance)} m`;
-            if (rivalScoreEl) rivalScoreEl.textContent = `${Math.floor(this.opponentScore)} PTS`;
 
-            // Counter animation ticking up from $0.00 to net winnings
-            if (payoutEl) {
-                const targetPayout = isVictory ? (netWinningsCents / 100) : 0;
-                let currentVal = 0;
-                const duration = 1200;
-                const start = performance.now();
+            if (!this.matchUuid) {
+                // Practice / Solo Simulation Mode
+                if (titleEl) {
+                    titleEl.textContent = 'PRACTICE CONCLUDED';
+                    titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-white uppercase italic';
+                }
+                if (statusBadge) statusBadge.textContent = 'SOLO SIMULATION';
+                if (payoutEl) payoutEl.textContent = '$0.00';
+                if (grossEl) grossEl.textContent = '$0.00';
+                if (rakeEl) rakeEl.textContent = '$0.00';
+                if (rivalDistEl) rivalDistEl.textContent = 'N/A';
+                if (rivalScoreEl) rivalScoreEl.textContent = 'N/A';
+            } else {
+                // Authoritative Paid Duel Mode: strictly display verifying state until server resolution
+                if (titleEl) {
+                    titleEl.textContent = 'LOCAL RUN FINISHED';
+                    titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-white uppercase italic';
+                }
+                if (statusBadge) statusBadge.textContent = 'VERIFYING RESULT...';
+                if (payoutEl) payoutEl.textContent = '$0.00';
+                if (grossEl) grossEl.textContent = 'VERIFYING...';
+                if (rakeEl) rakeEl.textContent = 'VERIFYING...';
+                if (rivalDistEl) rivalDistEl.textContent = 'AWAITING ARBITER...';
+                if (rivalScoreEl) rivalScoreEl.textContent = '...';
 
-                const step = (now) => {
-                    const progress = Math.min((now - start) / duration, 1.0);
-                    currentVal = targetPayout * progress;
-                    payoutEl.textContent = `$${currentVal.toFixed(2)}`;
-                    if (progress < 1.0) requestAnimationFrame(step);
+                // Listen for onDuelResolved callback from Reverb presence channel
+                this.onDuelResolvedCallback = (result) => {
+                    this._applyAuthoritativeResult(result);
                 };
-                requestAnimationFrame(step);
+
+                // Polling recovery fallback in case WebSocket was interrupted
+                this._pollAuthoritativeResult();
             }
 
-            // Rewarded Ad CTA Trigger
+            // Rewarded Ad CTA Trigger (Fail-Closed)
+            const rewardedSection = postModal.querySelector('#modal-rewarded-ad');
             const watchAdBtn = postModal.querySelector('#btn-watch-ad');
-            if (watchAdBtn) {
-                watchAdBtn.onclick = () => {
-                    watchAdBtn.textContent = 'SPONSOR REWARD ACTIVATED (-2% RAKE)';
-                    watchAdBtn.classList.remove('text-[#00F0FF]');
-                    watchAdBtn.classList.add('text-[#10B981]');
-                    fetch('/api/v1/ads/rewarded-complete', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            Accept: 'application/json',
-                            ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
-                        },
-                        body: JSON.stringify({ creative_id: 'rewarded-sponsor-clip' }),
-                    }).catch(() => {});
+            const isAdAvailable = rewardedSection?.dataset?.available === '1';
+
+            if (watchAdBtn && isAdAvailable) {
+                watchAdBtn.onclick = async () => {
+                    watchAdBtn.disabled = true;
+                    watchAdBtn.textContent = 'VERIFYING SPONSOR...';
+                    try {
+                        const res = await fetch('/api/v1/ads/rewarded-complete', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                Accept: 'application/json',
+                                'X-CSRF-TOKEN': csrfToken,
+                                'X-Requested-With': 'XMLHttpRequest',
+                                ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+                            },
+                            body: JSON.stringify({ creative_id: 'rewarded-sponsor-clip' }),
+                        });
+                        if (res.ok) {
+                            watchAdBtn.textContent = '2% RAKE DISCOUNT ACTIVE';
+                            watchAdBtn.classList.remove('text-[#00F0FF]');
+                            watchAdBtn.classList.add('text-[#10B981]');
+                        } else {
+                            watchAdBtn.disabled = false;
+                            watchAdBtn.textContent = 'SPONSOR REWARD FAILED';
+                        }
+                    } catch {
+                        watchAdBtn.disabled = false;
+                        watchAdBtn.textContent = 'SPONSOR REWARD FAILED';
+                    }
                 };
             }
 
@@ -593,6 +617,136 @@ export class GameApp {
 
         if (this.onGameOverCallback) {
             this.onGameOverCallback(payload);
+        }
+    }
+
+    /**
+     * Polls authoritative match result endpoint until settled.
+     */
+    _pollAuthoritativeResult() {
+        if (!this.matchUuid) return;
+
+        const csrfToken = typeof document !== 'undefined'
+            ? document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''
+            : '';
+
+        const poll = async () => {
+            if (this.authoritativeSettled) return;
+            try {
+                const res = await fetch(`/api/v1/duels/matches/${this.matchUuid}/result`, {
+                    headers: {
+                        Accept: 'application/json',
+                        'X-CSRF-TOKEN': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+                    },
+                });
+
+                if (res.status === 200) {
+                    const data = await res.json();
+                    this._applyAuthoritativeResult(data);
+                } else if (res.status === 202) {
+                    // Match still in progress, schedule next poll
+                    this.resultPollTimeout = setTimeout(poll, 1500);
+                }
+            } catch {
+                this.resultPollTimeout = setTimeout(poll, 2500);
+            }
+        };
+
+        this.resultPollTimeout = setTimeout(poll, 1500);
+    }
+
+    /**
+     * Applies server-authoritative settlement payload to modal UI.
+     * @param {Object} result
+     */
+    _applyAuthoritativeResult(result) {
+        if (this.authoritativeSettled) return;
+        this.authoritativeSettled = true;
+
+        if (this.resultPollTimeout) {
+            clearTimeout(this.resultPollTimeout);
+            this.resultPollTimeout = null;
+        }
+
+        const postModal = document.getElementById('post-match-modal');
+        if (!postModal) return;
+
+        const titleEl = postModal.querySelector('#modal-title');
+        const statusBadge = postModal.querySelector('#modal-status-badge');
+        const payoutEl = postModal.querySelector('#modal-payout-amount');
+        const grossEl = postModal.querySelector('#modal-gross-pot');
+        const rakeEl = postModal.querySelector('#modal-rake');
+        const yourDistEl = postModal.querySelector('#modal-your-distance');
+        const yourScoreEl = postModal.querySelector('#modal-your-score');
+        const rivalDistEl = postModal.querySelector('#modal-rival-distance');
+        const rivalScoreEl = postModal.querySelector('#modal-rival-score');
+
+        const state = result.resolution_state || result.resolution_type || 'COMPLETED';
+        const isVictory = state === 'VICTORY' || state === 'FORFEIT WIN';
+        const isDefeat = state === 'DEFEAT' || state === 'FORFEIT LOSS';
+        const isDisputed = state === 'DISPUTED';
+        const isCancelled = state === 'CANCELLED' || state === 'ABANDONED_CANCELLED';
+
+        if (titleEl) {
+            if (isVictory) {
+                titleEl.textContent = state === 'FORFEIT WIN' ? 'FORFEIT VICTORY!' : 'VICTORY!';
+                titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-[#10B981] uppercase italic';
+            } else if (isDefeat) {
+                titleEl.textContent = state === 'FORFEIT LOSS' ? 'FORFEIT LOSS' : 'DEFEAT';
+                titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-red-500 uppercase italic';
+            } else if (isDisputed) {
+                titleEl.textContent = 'DISPUTED';
+                titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-amber-500 uppercase italic';
+            } else {
+                titleEl.textContent = 'CANCELLED';
+                titleEl.className = 'text-3xl sm:text-4xl font-sans font-black tracking-tight text-slate-400 uppercase italic';
+            }
+        }
+
+        if (statusBadge) {
+            if (isVictory) statusBadge.textContent = 'AUTHORITATIVE WINNER';
+            else if (isDefeat) statusBadge.textContent = 'MATCH SETTLED';
+            else if (isDisputed) statusBadge.textContent = 'ESCROW REFUNDED';
+            else statusBadge.textContent = 'ESCROW REFUNDED';
+        }
+
+        const totalPotCents = result.total_pot_cents || 0;
+        const feeCents = result.platform_fee_cents || 0;
+        const payoutCents = result.winner_payout_cents || 0;
+
+        if (grossEl) grossEl.textContent = `$${(totalPotCents / 100).toFixed(2)}`;
+        if (rakeEl) rakeEl.textContent = `$${(feeCents / 100).toFixed(2)}`;
+
+        // Authoritative metrics
+        if (result.player) {
+            if (yourDistEl) yourDistEl.textContent = `${Math.floor(result.player.authoritative_distance)} m`;
+            if (yourScoreEl) yourScoreEl.textContent = `${Math.floor(result.player.authoritative_score)} PTS`;
+        }
+        if (result.rival) {
+            if (rivalDistEl) rivalDistEl.textContent = `${Math.floor(result.rival.authoritative_distance)} m`;
+            if (rivalScoreEl) rivalScoreEl.textContent = `${Math.floor(result.rival.authoritative_score)} PTS`;
+        }
+
+        if (payoutEl) {
+            if (isVictory) {
+                const targetPayout = payoutCents / 100;
+                let currentVal = 0;
+                const duration = 1200;
+                const start = performance.now();
+                const step = (now) => {
+                    const progress = Math.min((now - start) / duration, 1.0);
+                    currentVal = targetPayout * progress;
+                    payoutEl.textContent = `$${currentVal.toFixed(2)}`;
+                    if (progress < 1.0) requestAnimationFrame(step);
+                };
+                requestAnimationFrame(step);
+            } else if (isDisputed || isCancelled) {
+                payoutEl.textContent = 'REFUNDED';
+            } else {
+                payoutEl.textContent = '$0.00';
+            }
         }
     }
 

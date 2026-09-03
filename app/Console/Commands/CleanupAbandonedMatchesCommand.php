@@ -126,7 +126,9 @@ class CleanupAbandonedMatchesCommand extends Command
                             }
 
                             $ledgerService->settleMatch($match, $creator);
-                            event(new DuelResolved($match, $creator, 'FORFEIT'));
+                            DB::afterCommit(static function () use ($match, $creator): void {
+                                event(new DuelResolved($match, $creator, 'FORFEIT'));
+                            });
                             $this->info("Match #{$match->id}: Creator #{$creator->id} awarded forfeit victory.");
                         }
 
@@ -142,7 +144,9 @@ class CleanupAbandonedMatchesCommand extends Command
                             }
 
                             $ledgerService->settleMatch($match, $opponent);
-                            event(new DuelResolved($match, $opponent, 'FORFEIT'));
+                            DB::afterCommit(static function () use ($match, $opponent): void {
+                                event(new DuelResolved($match, $opponent, 'FORFEIT'));
+                            });
                             $this->info("Match #{$match->id}: Opponent #{$opponent->id} awarded forfeit victory.");
                         }
 
@@ -153,7 +157,9 @@ class CleanupAbandonedMatchesCommand extends Command
                     $abandonDeadline = $match->abandon_deadline_at ?? ($match->in_progress_at?->addMinutes(10) ?? $match->updated_at->addMinutes(10));
                     if (now()->isAfter($abandonDeadline)) {
                         $ledgerService->releaseEscrowOnCancel($match);
-                        event(new DuelResolved($match, null, 'ABANDONED_CANCELLED'));
+                        DB::afterCommit(static function () use ($match): void {
+                            event(new DuelResolved($match, null, 'ABANDONED_CANCELLED'));
+                        });
                         $this->info("Match #{$match->id}: Both players abandoned. Escrow refunded and match cancelled.");
                     }
                 });

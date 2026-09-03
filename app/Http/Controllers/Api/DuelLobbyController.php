@@ -23,6 +23,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 
@@ -183,8 +184,14 @@ class DuelLobbyController extends Controller
                     ]
                 );
 
-                // Broadcast DuelOpponentJoined to presence channel
-                broadcast(new DuelOpponentJoined($match, $user));
+                // Broadcast DuelOpponentJoined to presence channel after transaction commits
+                DB::afterCommit(static function () use ($match, $user): void {
+                    try {
+                        broadcast(new DuelOpponentJoined($match, $user));
+                    } catch (\Throwable $e) {
+                        Log::warning('DuelOpponentJoined broadcast skipped: '.$e->getMessage());
+                    }
+                });
 
                 return response()->json([
                     'message' => 'Successfully joined duel lobby.',
@@ -192,7 +199,7 @@ class DuelLobbyController extends Controller
                         'uuid' => $match->uuid,
                         'status' => $match->status->value,
                         'stake_amount_cents' => $match->stake_amount_cents,
-                        'game_seed' => $match->game_seed,
+                        'seed_commitment' => hash('sha256', $match->game_seed),
                     ],
                 ]);
             });
@@ -208,6 +215,7 @@ class DuelLobbyController extends Controller
     /**
      * 4. POST /api/v1/duels/matches/{uuid}/start-run
      * Issues single-use cryptographically secure run ticket; stores SHA-256 hash in database.
+     * Enforces that once started, started_at is immutable and cannot be restarted.
      */
     public function startRun(string $uuid, Request $request): JsonResponse
     {
@@ -248,18 +256,35 @@ class DuelLobbyController extends Controller
                 return response()->json(['message' => 'Run has already been completed and submitted.'], 409);
             }
 
+            // Task 5: Make paid start-run fair and non-resettable
+            if ($run->started_at !== null) {
+                // Check if run session expired
+                if ($run->ticket_expires_at !== null && now()->isAfter($run->ticket_expires_at)) {
+                    return response()->json(['message' => 'Paid run session has expired.'], 409);
+                }
+                // Check forfeit deadline
+                if ($match->forfeit_deadline_at !== null && now()->isAfter($match->forfeit_deadline_at)) {
+                    return response()->json(['message' => 'Paid run forfeit deadline has expired.'], 409);
+                }
+                // Network retry before expiry: keep started_at unchanged!
+            } else {
+                // Initial request: freeze authoritative clock
+                $run->started_at = now();
+            }
+
             // Issue single-use cryptographically secure raw token; persist SHA-256 hash
             $rawTicket = Str::random(48);
             $run->ticket_token = null; // Do not keep raw token in plaintext
             $run->ticket_hash = hash('sha256', $rawTicket);
-            $run->ticket_expires_at = now()->addMinutes(10);
-            $run->started_at = now();
+            $run->ticket_expires_at = now()->addSeconds((int) config('duels.ticket_ttl_seconds', 600));
             $run->save();
 
+            // Authoritative game_seed revealed exclusively upon verified start-run
             return response()->json([
                 'ticket_token' => $rawTicket,
                 'started_at' => $run->started_at->toISOString(),
                 'game_seed' => $match->game_seed,
+                'seed_commitment' => hash('sha256', $match->game_seed),
                 'match_uuid' => $match->uuid,
             ]);
         });
@@ -453,5 +478,79 @@ class DuelLobbyController extends Controller
         ))->toOthers();
 
         return response()->json(['status' => 'OK']);
+    }
+
+    /**
+     * 7. GET /api/v1/duels/matches/{uuid}/result
+     * Authoritative post-match recovery endpoint for participants.
+     */
+    public function getResult(string $uuid, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        /** @var MatchGame|null $match */
+        $match = MatchGame::where('uuid', $uuid)->first();
+
+        if ($match === null) {
+            return response()->json(['message' => 'Match not found.'], 404);
+        }
+
+        if ((int) $match->creator_user_id !== (int) $user->id && (int) $match->opponent_user_id !== (int) $user->id) {
+            return response()->json(['message' => 'Unauthorized: not a participant in this match.'], 403);
+        }
+
+        $terminalStates = [
+            MatchStatus::Completed,
+            MatchStatus::Cancelled,
+            MatchStatus::Disputed,
+        ];
+
+        if (! in_array($match->status, $terminalStates, true)) {
+            return response()->json([
+                'status' => 'PENDING',
+                'match_status' => $match->status->value,
+                'message' => 'Match settlement is still pending.',
+            ], 202);
+        }
+
+        $runs = $match->runs;
+        $myRun = $runs->firstWhere('user_id', $user->id);
+        $rivalUserId = (int) $match->creator_user_id === (int) $user->id ? $match->opponent_user_id : $match->creator_user_id;
+        $rivalRun = $rivalUserId ? $runs->firstWhere('user_id', $rivalUserId) : null;
+
+        // Determine client resolution state
+        $resolutionState = 'DEFEAT';
+        if ($match->status === MatchStatus::Cancelled) {
+            $resolutionState = 'CANCELLED';
+        } elseif ($match->status === MatchStatus::Disputed) {
+            $resolutionState = 'DISPUTED';
+        } elseif ((int) $match->winner_user_id === (int) $user->id) {
+            $resolutionState = ($rivalRun?->audit_status === AuditStatus::Forfeit) ? 'FORFEIT WIN' : 'VICTORY';
+        } else {
+            $resolutionState = ($myRun?->audit_status === AuditStatus::Forfeit) ? 'FORFEIT LOSS' : 'DEFEAT';
+        }
+
+        return response()->json([
+            'match_uuid' => $match->uuid,
+            'status' => $match->status->value,
+            'resolution_state' => $resolutionState,
+            'winner_user_id' => $match->winner_user_id,
+            'total_pot_cents' => $match->total_pot_cents ?? ($match->stake_amount_cents * 2),
+            'platform_fee_cents' => $match->platform_fee_cents,
+            'winner_payout_cents' => $match->winner_payout_cents,
+            'rake_bps' => $match->rake_bps,
+            'player' => [
+                'user_id' => $user->id,
+                'authoritative_score' => $myRun?->authoritative_score ?? $myRun?->final_score ?? 0,
+                'authoritative_distance' => $myRun?->authoritative_distance ?? $myRun?->final_distance ?? 0.0,
+            ],
+            'rival' => [
+                'user_id' => $rivalUserId,
+                'authoritative_score' => $rivalRun?->authoritative_score ?? $rivalRun?->final_score ?? 0,
+                'authoritative_distance' => $rivalRun?->authoritative_distance ?? $rivalRun?->final_distance ?? 0.0,
+            ],
+            'settled_at' => $match->settled_at?->toISOString(),
+        ]);
     }
 }

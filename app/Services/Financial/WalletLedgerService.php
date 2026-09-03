@@ -7,6 +7,7 @@ namespace App\Services\Financial;
 use App\Enums\LedgerEntryType;
 use App\Enums\MatchStatus;
 use App\Enums\TransactionCategory;
+use App\Exceptions\FinancialInvariantException;
 use App\Exceptions\InsufficientFundsException;
 use App\Exceptions\InvalidMatchStateException;
 use App\Models\LedgerAccount;
@@ -321,13 +322,17 @@ class WalletLedgerService
                 $w->save();
             }
 
-            // Calculate rake and payout with strict integer arithmetic using basis points
+            // Calculate rake and payout with strict integer floor arithmetic using basis points
             $totalPot = $lockedMatch->stake_amount_cents * 2;
             $rakeBps = $lockedMatch->rake_bps ?? (int) round(((float) $lockedMatch->rake_percentage) * 100);
-            $platformFee = intdiv($totalPot * $rakeBps + 5000, 10_000);
+            $platformFee = intdiv($totalPot * $rakeBps, 10_000);
             $payout = $totalPot - $platformFee;
 
-            assert(($payout + $platformFee) === $totalPot, 'Ledger imbalance detected in pot distribution.');
+            if (($payout + $platformFee) !== $totalPot) {
+                throw new FinancialInvariantException(
+                    "Conservation invariant violated in pot distribution: pot={$totalPot}, payout={$payout}, fee={$platformFee}."
+                );
+            }
 
             // Credit winner wallet: balance_cents += payout
             /** @var Wallet $winnerWallet */
