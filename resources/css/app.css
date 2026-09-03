@@ -1,0 +1,70 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../views/**/*.blade.php';
+@source '../js/**/*.js';
+
+@theme {
+    --font-sans: 'Outfit', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    --color-jet: #0A0A0C;
+    --color-obsidian: #121316;
+    --color-obsidian-light: #1A1C22;
+    --color-gold: #D4AF37;
+    --color-gold-deep: #AA820A;
+    --color-gold-light: #F3E5AB;
+    --color-amber-neon: #FFB800;
+    --color-crimson-neon: #FF0055;
+    --color-cyan-neon: #00F0FF;
+    --color-emerald-neon: #10B981;
+    --color-slate-crisp: #94A3B8;
+}
+
+@layer utilities {
+    .bg-luxury-glass {
+        background-color: rgba(18, 19, 22, 0.82);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    .bg-gold-metallic {
+        background: linear-gradient(135deg, #F3E5AB 0%, #D4AF37 50%, #AA820A 100%);
+    }
+
+    .text-gold-metallic {
+        background: linear-gradient(135deg, #FFFFFF 0%, #F3E5AB 25%, #D4AF37 70%, #AA820A 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .shadow-gold-glow {
+        box-shadow: 0 0 25px rgba(212, 175, 55, 0.28);
+    }
+
+    .shadow-gold-glow-lg {
+        box-shadow: 0 0 40px rgba(212, 175, 55, 0.45);
+    }
+
+    .shadow-crimson-glow {
+        box-shadow: 0 0 25px rgba(255, 0, 85, 0.35);
+    }
+
+    .shadow-cyan-glow {
+        box-shadow: 0 0 25px rgba(0, 240, 255, 0.35);
+    }
+}
+
+@keyframes goldShimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+    background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.2), transparent);
+    background-size: 200% 100%;
+    animation: goldShimmer 2.5s infinite;
+}
+
