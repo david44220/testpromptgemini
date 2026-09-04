@@ -138,6 +138,11 @@ jobs:
         ports:
           - 5432:5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
       - name: Checkout Repository
@@ -187,6 +192,7 @@ jobs:
           echo "VITE_REVERB_HOST=127.0.0.1" >> .env
           echo "VITE_REVERB_PORT=8080" >> .env
           echo "VITE_REVERB_SCHEME=http" >> .env
+          echo "REVERB_SCALING_ENABLED=false" >> .env
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
@@ -231,10 +237,19 @@ jobs:
           REVERB_HOST: 127.0.0.1
           REVERB_PORT: 8080
           REVERB_SCHEME: http
+          REVERB_SCALING_ENABLED: false
           VITE_REVERB_APP_KEY: cyber_key
           VITE_REVERB_HOST: 127.0.0.1
           VITE_REVERB_PORT: 8080
           VITE_REVERB_SCHEME: http
+
+      - name: Output Playwright Failure Details
+        if: failure()
+        run: |
+          echo "=== PLAYWRIGHT FAILURE DETAILS ==="
+          if [ -d "test-results" ]; then
+            find test-results -type f -name "*.txt" -exec head -n 100 {} + || true
+          fi
 
       - name: Upload Playwright Artifacts on Failure
         uses: actions/upload-artifact@v4

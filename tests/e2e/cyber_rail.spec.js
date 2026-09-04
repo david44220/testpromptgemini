@@ -208,8 +208,8 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     await tabA.goto('/game', { waitUntil: 'domcontentloaded' });
     console.log('[E2E-04] Tab A waiting for #game-canvas...');
     await expect(tabA.locator('#game-canvas')).toBeVisible({ timeout: 15000 });
-    await tabA.waitForLoadState('networkidle');
-    console.log('[E2E-04] Tab A #game-canvas visible & network idle');
+    await tabA.waitForTimeout(1000);
+    console.log('[E2E-04] Tab A #game-canvas visible & stable');
 
     // Tab B opens dashboard
     console.log('[E2E-04] Creating Tab B...');

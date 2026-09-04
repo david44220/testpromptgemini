@@ -8,7 +8,7 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1,
-  reporter: 'list',
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:8000',
     viewport: { width: 1280, height: 720 },
@@ -17,6 +17,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     launchOptions: {
       args: [
+        '--ignore-gpu-blocklist',
         '--use-gl=angle',
         '--use-angle=swiftshader',
         '--enable-webgl',
