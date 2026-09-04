@@ -75,6 +75,16 @@ export class GameEngine {
     }
 
     _setupPostProcessing(width, height) {
+        // In headless browser / automated testing environments, bypass multi-pass blur to avoid SwiftShader CPU starvation
+        const isHeadless = typeof navigator !== 'undefined' && (
+            /HeadlessChrome/.test(navigator.userAgent) ||
+            Boolean(navigator.webdriver)
+        );
+        if (isHeadless) {
+            this.composer = null;
+            return;
+        }
+
         try {
             const renderPass = new RenderPass(this.scene, this.camera);
             const bloomPass = new UnrealBloomPass(
@@ -177,11 +187,26 @@ export class GameEngine {
     _loop(currentTime) {
         if (!this.isRunning) return;
 
+        // Skip heavy WebGL/SwiftShader rasterization when tab is hidden or unfocused and idle
+        if (typeof document !== 'undefined' && (document.hidden || (!document.hasFocus() && this.tickCount === 0))) {
+            this.lastTime = currentTime;
+            this.accumulator = 0;
+            this.animationFrameId = requestAnimationFrame(this._loop);
+            return;
+        }
+
+        // Cap rendering to 30 FPS to prevent SwiftShader CPU saturation in headless/software environments
+        if (currentTime - (this.lastRenderTime || 0) < 33) {
+            this.animationFrameId = requestAnimationFrame(this._loop);
+            return;
+        }
+        this.lastRenderTime = currentTime;
+
         const frameDelta = (currentTime - this.lastTime) / 1000;
         this.lastTime = currentTime;
 
         // Clamp delta time to prevent spiral of death during background tab hibernation
-        const clampedDelta = Math.min(frameDelta, 0.1);
+        const clampedDelta = Math.min(frameDelta, 0.25);
         this.accumulator += clampedDelta;
 
         // Execute deterministic fixed physics ticks

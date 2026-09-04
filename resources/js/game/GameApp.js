@@ -464,15 +464,17 @@ export class GameApp {
         }, 1200);
     }
 
-    _handleGameOver(tick) {
+    _handleGameOver(tickIndex) {
         this.state = 'GAME_OVER';
         this.engine.stop();
+
+        const completedSteps = tickIndex + 1;
 
         const payload = this.recorder.exportPayload({
             score: this.score,
             coins: this.coins,
             distance: this.distance,
-            ticks: tick,
+            ticks: completedSteps,
         });
 
         this.lastExportPayload = payload;
@@ -497,7 +499,7 @@ export class GameApp {
                 },
                 body: JSON.stringify({
                     ticket_token: tokenToSubmit,
-                    ticks_elapsed: tick,
+                    ticks_elapsed: completedSteps,
                     final_distance: Math.floor(this.distance * 100) / 100,
                     final_score: Math.floor(this.score),
                     inputs: this.recorder.actionLog.map(act => ({
@@ -647,14 +649,14 @@ export class GameApp {
                     this._applyAuthoritativeResult(data);
                 } else if (res.status === 202) {
                     // Match still in progress, schedule next poll
-                    this.resultPollTimeout = setTimeout(poll, 1500);
+                    this.resultPollTimeout = setTimeout(poll, 1000);
                 }
             } catch {
-                this.resultPollTimeout = setTimeout(poll, 2500);
+                this.resultPollTimeout = setTimeout(poll, 1500);
             }
         };
 
-        this.resultPollTimeout = setTimeout(poll, 1500);
+        this.resultPollTimeout = setTimeout(poll, 1000);
     }
 
     /**

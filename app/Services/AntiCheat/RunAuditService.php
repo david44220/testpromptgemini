@@ -130,15 +130,18 @@ class RunAuditService
         $realDurationSeconds = max(0.001, ($submittedAt->getTimestampMs() - $startedAt->getTimestampMs()) / 1000.0);
         $ticksSeconds = $ticksElapsed / 60.0;
 
-        $delta = $realDurationSeconds - $ticksSeconds;
-
-        // If client ran significantly faster than 60 FPS (e.g. 40s ticks in 10s real time)
+        // 1. Client running faster than physical time (Speedhack: claiming more simulation time than wall-clock time)
         if ($ticksSeconds - $realDurationSeconds > self::MAX_TEMPORAL_DELTA_SECONDS) {
             return false;
         }
 
-        // Operational network latency allow up to +2.5 seconds (or reasonable mobile delay)
-        return abs($delta) <= self::MAX_TEMPORAL_DELTA_SECONDS;
+        // 2. Client lagging or network submission delay: allow up to forfeit window
+        $maxLagBuffer = (float) config('duels.forfeit_timeout_seconds', 180);
+        if ($realDurationSeconds - $ticksSeconds > $maxLagBuffer) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

@@ -7,9 +7,48 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  laravel-quality-gate:
+  quality:
+    name: Code Quality & Determinism
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_sqlite, sqlite3, bcmath
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Composer Dependencies
+        run: composer install --prefer-dist --no-interaction --optimize-autoloader
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: Run Pint Format Check
+        run: vendor/bin/pint --test
+
+      - name: Run JavaScript Determinism Tests
+        run: npm run test:determinism
+
+      - name: Run JavaScript Tick Contract Tests
+        run: npm run test:ticks
+
+      - name: Build Frontend Assets
+        run: npm run build
+
+  php-postgres:
+    name: PHPUnit & PostgreSQL Suites
+    runs-on: ubuntu-latest
+    needs: [quality]
     services:
       postgres:
         image: postgres:16
@@ -35,7 +74,80 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Composer Dependencies
+        run: composer install --prefer-dist --no-interaction --optimize-autoloader
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: Build Frontend Assets
+        run: npm run build
+
+      - name: Setup Environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: cyber_arena_test
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+
+      - name: Run PostgreSQL Migrations and Seeders
+        run: php artisan migrate:fresh --seed --database=pgsql --force
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: cyber_arena_test
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+
+      - name: Run PHPUnit Test Suites (Unit, Feature, Concurrency)
+        run: php artisan test
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: cyber_arena_test
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+
+  browser-e2e:
+    name: Playwright Real Browser E2E Tests
+    runs-on: ubuntu-latest
+    needs: [quality]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: cyber_arena_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_pgsql, pgsql, pdo_sqlite, sqlite3, bcmath
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
           cache: 'npm'
 
       - name: Install Composer Dependencies
@@ -62,24 +174,8 @@ jobs:
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
 
-      - name: Run Pint Format Check
-        run: vendor/bin/pint --test
-
-      - name: Run JavaScript Determinism Tests
-        run: npm run test:determinism
-
       - name: Run PostgreSQL Migrations and Seeders
         run: php artisan migrate:fresh --seed --database=pgsql --force
-        env:
-          DB_CONNECTION: pgsql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_DATABASE: cyber_arena_test
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-
-      - name: Run PHPUnit Test Suites (Unit, Feature, Concurrency)
-        run: php artisan test
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
@@ -98,3 +194,13 @@ jobs:
           DB_DATABASE: cyber_arena_test
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+          REVERB_APP_KEY: cyber_key
+          REVERB_APP_SECRET: cyber_secret
+          REVERB_APP_ID: 100001
+          REVERB_HOST: 127.0.0.1
+          REVERB_PORT: 8080
+          REVERB_SCHEME: http
+          VITE_REVERB_APP_KEY: cyber_key
+          VITE_REVERB_HOST: 127.0.0.1
+          VITE_REVERB_PORT: 8080
+          VITE_REVERB_SCHEME: http

@@ -61,7 +61,7 @@
                 </div>
 
                 <div>
-                    <button type="submit" class="w-full py-3.5 rounded-xl bg-gold-metallic text-black font-mono font-black text-xs uppercase tracking-wider shadow-gold-glow hover:scale-[1.02] transition-transform cursor-pointer">
+                    <button id="btn-login-submit" type="submit" class="w-full py-3.5 rounded-xl bg-gold-metallic text-black font-mono font-black text-xs uppercase tracking-wider shadow-gold-glow hover:scale-[1.02] transition-transform cursor-pointer">
                         ENTER DUEL ARENA
                     </button>
                 </div>

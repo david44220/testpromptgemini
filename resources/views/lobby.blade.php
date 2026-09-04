@@ -253,15 +253,20 @@
                 waitingPollInterval = setInterval(async () => {
                     try {
                         const check = await fetch(`/api/v1/duels/matches/${createdMatchUuid}/result`, {
-                            headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': getCsrfToken() }
+                            headers: {
+                                'Accept': 'application/json',
+                                'X-CSRF-TOKEN': getCsrfToken(),
+                                'X-Requested-With': 'XMLHttpRequest',
+                            }
                         });
                         const matchData = await check.json();
-                        if (matchData.status === 'in_progress' || matchData.status === 'ready') {
+                        const mStatus = (matchData.match_status || matchData.status || '').toLowerCase();
+                        if (mStatus === 'in_progress' || mStatus === 'ready') {
                             clearInterval(waitingPollInterval);
                             window.location.href = `/duels/${createdMatchUuid}/play`;
                         }
                     } catch {}
-                }, 2000);
+                }, 1000);
 
             } catch (err) {
                 errBox.textContent = 'Network communication failure.';
@@ -360,7 +365,7 @@
                     const creatorName = match.creator?.name || 'RIVAL_RUNNER';
 
                     return `
-                    <div class="rounded-2xl bg-[#121316] border border-white/5 hover:border-[#D4AF37]/40 p-5 space-y-4 shadow-lg transition-all duration-300 hover:shadow-gold-glow group">
+                    <div class="rounded-2xl bg-[#121316] border border-white/5 hover:border-[#D4AF37]/40 p-5 space-y-4 shadow-lg transition-all duration-300 hover:shadow-gold-glow group" data-lobby-uuid="${match.uuid}">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center space-x-3">
                                 <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(creatorName)}&background=00F0FF&color=000" class="w-10 h-10 rounded-xl object-cover ring-1 ring-white/10" alt="${creatorName}" />
@@ -387,8 +392,9 @@
 
                         <button 
                             type="button"
+                            data-lobby-uuid="${match.uuid}"
                             onclick="joinDuel('${match.uuid}')"
-                            class="block w-full py-2.5 text-center rounded-xl bg-gold-metallic text-black font-mono font-black text-xs uppercase tracking-wider shadow-gold-glow hover:scale-[1.01] transition-all cursor-pointer"
+                            class="btn-join-duel block w-full py-2.5 text-center rounded-xl bg-gold-metallic text-black font-mono font-black text-xs uppercase tracking-wider shadow-gold-glow hover:scale-[1.01] transition-all cursor-pointer"
                         >
                             ACCEPT DUEL (${stakeFormatted})
                         </button>

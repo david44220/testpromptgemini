@@ -76,6 +76,7 @@ Route::middleware('auth')->group(function () {
             'user' => $user,
             'wallet' => $wallet,
             'seed' => $seed,
+            'seedCommitment' => hash('sha256', $seed),
             'stakeCents' => 0,
             'potCents' => 0,
             'matchUuid' => null,
@@ -122,7 +123,7 @@ Route::middleware('auth')->group(function () {
         return view('game', [
             'user' => $user,
             'wallet' => $wallet,
-            'seed' => $match->game_seed,
+            'seedCommitment' => hash('sha256', $match->game_seed),
             'stakeCents' => $match->stake_amount_cents,
             'potCents' => $match->stake_amount_cents * 2,
             'matchUuid' => $match->uuid,

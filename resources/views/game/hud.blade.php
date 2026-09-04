@@ -148,7 +148,7 @@
             <span class="w-2 h-2 rounded-full bg-[#10B981]"></span>
             <span>REVERB: CONNECTED</span>
             <span class="text-slate-600">|</span>
-            <span id="hud-seed-info" class="text-slate-400">{{ !empty($isPaid) ? 'COMMIT: '.substr(hash('sha256', $seed ?? ''), 0, 8).'...' : 'SEED: '.substr($seed ?? 'e3b0c442', 0, 8).'...' }}</span>
+            <span id="hud-seed-info" class="text-slate-400">{{ !empty($isPaid) ? 'COMMIT: '.substr($seedCommitment ?? '', 0, 8).'...' : 'SEED: '.substr($seed ?? 'e3b0c442', 0, 8).'...' }}</span>
         </div>
 
         <!-- Action Triggers -->

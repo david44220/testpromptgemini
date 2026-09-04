@@ -77,15 +77,11 @@ class MatchGame extends Model
             }
 
             if (empty($match->rake_bps)) {
-                if (! empty($match->rake_percentage)) {
-                    $match->rake_bps = (int) round(((float) $match->rake_percentage) * 100);
-                } else {
-                    $match->rake_bps = (int) config('duels.default_rake_bps', 1000);
-                }
+                $match->rake_bps = (int) config('duels.default_rake_bps', 1000);
             }
 
             if (empty($match->rake_percentage)) {
-                $match->rake_percentage = (string) number_format($match->rake_bps / 100, 2, '.', '');
+                $match->rake_percentage = sprintf('%d.%02d', intdiv($match->rake_bps, 100), $match->rake_bps % 100);
             }
         });
     }

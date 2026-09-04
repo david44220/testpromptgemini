@@ -149,7 +149,7 @@ class TrackGenerator
             $minX = $px - 0.95;
             $maxX = $px + 0.95;
             $minY = 0.0;
-            $maxY = 0.75;
+            $maxY = 1.25;
             $minZ = $pz - 0.25;
             $maxZ = $pz + 0.25;
         } elseif ($type === 'ARCHWAY') {

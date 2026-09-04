@@ -161,7 +161,7 @@ class MatchSettlementEscrowTest extends TestCase
             'creator_user_id' => $creator->id,
             'opponent_user_id' => $opponent->id,
             'stake_amount_cents' => $stake,
-            'rake_percentage' => $rakePercentage,
+            'rake_bps' => 750,
             'status' => MatchStatus::Ready,
         ]);
 

@@ -451,9 +451,9 @@ export class ObstaclePool {
         const pz = item.mesh.position.z;
 
         if (item.type === 'HURDLE') {
-            // Hurdle: height 0.0 to 0.75m
+            // Hurdle: height 0.0 to 1.25m (cleared by jumping > 1.25m)
             item.boundingBox.min.set(px - 0.95, 0.0, pz - 0.25);
-            item.boundingBox.max.set(px + 0.95, 0.75, pz + 0.25);
+            item.boundingBox.max.set(px + 0.95, 1.25, pz + 0.25);
         } else if (item.type === 'ARCHWAY') {
             // Archway: crossbar is at Y: 1.1 to 2.4m (allows ducking under 0.85m)
             item.boundingBox.min.set(px - 0.95, 1.05, pz - 0.3);

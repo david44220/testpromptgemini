@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Enums\MatchStatus;
+use App\Models\MatchGame;
 use App\Models\User;
 use Database\Seeders\LedgerAccountSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -58,5 +60,32 @@ class GameRouteTest extends TestCase
 
         $response->assertStatus(200);
         $response->assertSee($customSeed);
+    }
+
+    /**
+     * Test /duels/{uuid}/play renders commitment and strictly omits raw seed before start-run.
+     */
+    public function test_paid_duel_route_renders_commitment_and_omits_raw_seed_before_start_run(): void
+    {
+        $creator = User::factory()->create();
+        $opponent = User::factory()->create();
+
+        $rawSeed = 'c0ffee00112233445566778899aabbccddeeff00112233445566778899aabbcc';
+        $commitment = hash('sha256', $rawSeed);
+
+        /** @var MatchGame $match */
+        $match = MatchGame::factory()->create([
+            'creator_user_id' => $creator->id,
+            'opponent_user_id' => $opponent->id,
+            'status' => MatchStatus::InProgress,
+            'game_seed' => $rawSeed,
+        ]);
+
+        $response = $this->actingAs($creator)->get("/duels/{$match->uuid}/play");
+
+        $response->assertStatus(200);
+        $response->assertDontSee($rawSeed, false);
+        $response->assertSee('data-commitment="'.$commitment.'"', false);
+        $response->assertDontSee('data-seed=', false);
     }
 }

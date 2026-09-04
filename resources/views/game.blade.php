@@ -30,7 +30,7 @@
             id="game-canvas" 
             class="w-full h-full block absolute inset-0 z-10"
             @if(empty($matchUuid)) data-seed="{{ $seed ?? '' }}" @endif
-            data-commitment="{{ !empty($seed) ? hash('sha256', $seed) : '' }}"
+            data-commitment="{{ $seedCommitment ?? (!empty($seed) ? hash('sha256', $seed) : '') }}"
             data-match="{{ $matchUuid ?? '' }}"
             data-stake="{{ $stakeCents ?? 5000 }}"
             data-pot="{{ $potCents ?? 10000 }}"
@@ -39,7 +39,8 @@
         <!-- Real-Time Decoupled HUD Overlay Layer (pointer-events-none) -->
         @include('game.hud', [
             'potCents' => $potCents ?? 10000,
-            'seed' => $seed ?? 'e3b0c442',
+            'seed' => $seed ?? null,
+            'seedCommitment' => $seedCommitment ?? (!empty($seed) ? hash('sha256', $seed) : ''),
             'isPaid' => !empty($matchUuid),
             'user' => $user,
             'wallet' => $wallet,

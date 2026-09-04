@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Models\MatchGame;
 use App\Models\User;
 use Illuminate\Support\Facades\Broadcast;
+use Illuminate\Support\Str;
 
 /**
  * 1. presence-duel.{matchUuid}
@@ -12,6 +13,10 @@ use Illuminate\Support\Facades\Broadcast;
  * Returns public player payload for presence tracking.
  */
 Broadcast::channel('duel.{matchUuid}', function (User $user, string $matchUuid) {
+    if (! Str::isUuid($matchUuid)) {
+        return false;
+    }
+
     /** @var MatchGame|null $match */
     $match = MatchGame::where('uuid', $matchUuid)->first();
 

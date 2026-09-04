@@ -415,7 +415,7 @@ class DuelLobbyController extends Controller
 
             $matchId = $match->id;
             if ($totalSubmitted >= 2) {
-                DB::afterCommit(fn () => ProcessDuelSettlement::dispatch($matchId));
+                DB::afterCommit(fn () => ProcessDuelSettlement::dispatchSync($matchId));
             } else {
                 $delaySeconds = (int) config('duels.forfeit_timeout_seconds', 180);
                 DB::afterCommit(fn () => ProcessDuelSettlement::dispatch($matchId)->delay(now()->addSeconds($delaySeconds)));

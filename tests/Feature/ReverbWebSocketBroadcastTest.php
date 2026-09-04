@@ -68,9 +68,20 @@ class ReverbWebSocketBroadcastTest extends TestCase
         $outsiderPayload = $channelCallback($outsider, $match->uuid);
         $this->assertFalse($outsiderPayload, 'Outsider must not be authorized to join duel presence channel.');
 
-        // 4. Invalid match UUID rejected
-        $invalidPayload = $channelCallback($creator, 'non-existent-uuid');
-        $this->assertFalse($invalidPayload, 'Non-existent match UUID must return false.');
+        // 4. Invalid match UUID syntax and non-existent records safely return false without QueryException
+        $invalidVectors = [
+            'non-existent-uuid',
+            '',
+            'foo',
+            '../../etc/passwd',
+            '123',
+            '00000000-0000-0000-0000-000000000000', // Valid UUID syntax, non-existent record
+        ];
+
+        foreach ($invalidVectors as $invalidUuid) {
+            $result = $channelCallback($creator, $invalidUuid);
+            $this->assertFalse($result, "Expected false for UUID input [{$invalidUuid}].");
+        }
     }
 
     /**

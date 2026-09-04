@@ -15,7 +15,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
-class BrowserEndToEndVerificationTest extends TestCase
+class HttpWorkflowVerificationTest extends TestCase
 {
     use RefreshDatabase;
 

@@ -142,7 +142,9 @@ class WalletLedgerService
                 // Reverse the lock, credit back to balance_cents, decrement locked_balance_cents
                 $wallet->balance_cents += $lockedMatch->stake_amount_cents;
                 $wallet->locked_balance_cents -= $lockedMatch->stake_amount_cents;
-                assert($wallet->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
+                if ($wallet->locked_balance_cents < 0) {
+                    throw new FinancialInvariantException('Locked balance invariant violated: negative locked balance.');
+                }
                 $wallet->save();
 
                 $groupId = (string) Str::uuid();
@@ -223,7 +225,9 @@ class WalletLedgerService
             // Return locked stake back to honest player's available balance
             $honestWallet->locked_balance_cents -= $lockedMatch->stake_amount_cents;
             $honestWallet->balance_cents += $lockedMatch->stake_amount_cents;
-            assert($honestWallet->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
+            if ($honestWallet->locked_balance_cents < 0) {
+                throw new FinancialInvariantException('Locked balance invariant violated: negative locked balance.');
+            }
             $honestWallet->save();
 
             $groupId = (string) Str::uuid();
@@ -318,17 +322,29 @@ class WalletLedgerService
                     throw new InsufficientFundsException("Wallet #{$w->id} locked balance insufficient for settlement deduction.");
                 }
                 $w->locked_balance_cents -= $lockedMatch->stake_amount_cents;
-                assert($w->locked_balance_cents >= 0, 'Locked balance invariant violated: negative locked balance.');
+                if ($w->locked_balance_cents < 0) {
+                    throw new FinancialInvariantException('Locked balance invariant violated: negative locked balance.');
+                }
                 $w->save();
             }
 
             // Calculate rake and payout with strict integer floor arithmetic using basis points
             $totalPot = $lockedMatch->stake_amount_cents * 2;
-            $rakeBps = $lockedMatch->rake_bps ?? (int) round(((float) $lockedMatch->rake_percentage) * 100);
+            $rakeBps = $lockedMatch->rake_bps;
+            $maxRakeBps = (int) config('duels.max_rake_bps', 2500);
+
+            if ($rakeBps === null || $rakeBps < 0 || $rakeBps > $maxRakeBps) {
+                throw new FinancialInvariantException("Invalid rake basis points: {$rakeBps}.");
+            }
+
+            if ($totalPot <= 0) {
+                throw new FinancialInvariantException("Invalid total pot cents: {$totalPot}.");
+            }
+
             $platformFee = intdiv($totalPot * $rakeBps, 10_000);
             $payout = $totalPot - $platformFee;
 
-            if (($payout + $platformFee) !== $totalPot) {
+            if ($payout < 0 || $platformFee < 0 || ($payout + $platformFee) !== $totalPot) {
                 throw new FinancialInvariantException(
                     "Conservation invariant violated in pot distribution: pot={$totalPot}, payout={$payout}, fee={$platformFee}."
                 );

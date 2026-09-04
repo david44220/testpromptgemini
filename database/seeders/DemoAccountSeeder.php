@@ -71,7 +71,7 @@ class DemoAccountSeeder extends Seeder
             );
 
             /** @var Wallet $wallet */
-            $wallet = Wallet::firstOrCreate(
+            $wallet = Wallet::updateOrCreate(
                 ['user_id' => $user->id],
                 [
                     'currency' => 'USD',

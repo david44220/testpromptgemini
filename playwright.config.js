@@ -19,7 +19,10 @@ export default defineConfig({
         '--use-angle=swiftshader',
         '--enable-webgl',
         '--no-sandbox',
-        '--disable-setuid-sandbox'
+        '--disable-setuid-sandbox',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding'
       ]
     }
   },
@@ -29,12 +32,22 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'php artisan serve --port=8000',
-    url: 'http://127.0.0.1:8000',
-    reuseExistingServer: true,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    timeout: 30000,
-  },
+  webServer: [
+    {
+      command: 'php artisan serve --port=8000',
+      url: 'http://127.0.0.1:8000',
+      reuseExistingServer: true,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 30000,
+    },
+    {
+      command: 'php artisan reverb:start --port=8080',
+      port: 8080,
+      reuseExistingServer: true,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 30000,
+    },
+  ],
 });
