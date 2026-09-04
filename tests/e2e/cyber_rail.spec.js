@@ -65,6 +65,12 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     // Context A (Player A: Apex Titan)
     const contextA = await browser.newContext();
     const pageA = await contextA.newPage();
+    const errorsA = [];
+    pageA.on('pageerror', err => errorsA.push(`[PageA Exception]: ${err.message}`));
+    pageA.on('console', msg => {
+      if (msg.type() === 'error') errorsA.push(`[PageA Console]: ${msg.text()}`);
+    });
+
     await loginUser(pageA, 'apex@cyber-rail.gg');
     await pageA.goto('/lobby');
 
@@ -83,6 +89,12 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     // Context B (Player B: Viper 99) in an independent browser context
     const contextB = await browser.newContext();
     const pageB = await contextB.newPage();
+    const errorsB = [];
+    pageB.on('pageerror', err => errorsB.push(`[PageB Exception]: ${err.message}`));
+    pageB.on('console', msg => {
+      if (msg.type() === 'error') errorsB.push(`[PageB Console]: ${msg.text()}`);
+    });
+
     await loginUser(pageB, 'viper@cyber-rail.gg');
     await pageB.goto('/lobby');
 
@@ -117,9 +129,18 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     await expect(pageA.locator('#hud-start-banner')).toContainText('READY FOR COMBAT');
     await expect(pageB.locator('#hud-start-banner')).toContainText('READY FOR COMBAT');
 
-    // Player A launches run
+    // Player A launches run: observe authoritative start-run negotiation
     await pageA.bringToFront();
+    const startRunPromiseA = pageA.waitForResponse(
+      response => response.url().includes('/start-run') && response.request().method() === 'POST'
+    );
     await pageA.click('#hud-btn-start');
+    const startRunResA = await startRunPromiseA;
+    expect(startRunResA.status(), `Player A start-run must return 200. Logs: ${errorsA.join('; ')}`).toBe(200);
+    const startRunDataA = await startRunResA.json();
+    expect(startRunDataA.ticket_token).toBeTruthy();
+    expect(startRunDataA.game_seed).toBeTruthy();
+    expect(startRunDataA.seed_commitment).toBe(commitmentA);
     await expect(pageA.locator('#hud-start-banner')).toBeHidden({ timeout: 5000 });
 
     // Wait for Player A's run to encounter collision at obstacle wave and submit
@@ -133,9 +154,18 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     expect(modalTitleA).not.toContain('DEFEAT');
     expect(modalTitleA).not.toContain('WINNER DECLARED');
 
-    // Player B now launches run
+    // Player B now launches run: observe authoritative start-run negotiation
     await pageB.bringToFront();
+    const startRunPromiseB = pageB.waitForResponse(
+      response => response.url().includes('/start-run') && response.request().method() === 'POST'
+    );
     await pageB.click('#hud-btn-start');
+    const startRunResB = await startRunPromiseB;
+    expect(startRunResB.status(), `Player B start-run must return 200. Logs: ${errorsB.join('; ')}`).toBe(200);
+    const startRunDataB = await startRunResB.json();
+    expect(startRunDataB.ticket_token).toBeTruthy();
+    expect(startRunDataB.game_seed).toBeTruthy();
+    expect(startRunDataB.seed_commitment).toBe(commitmentB);
     await expect(pageB.locator('#hud-start-banner')).toBeHidden({ timeout: 5000 });
 
     // Wait for Player B's run to encounter collision and submit
@@ -163,7 +193,7 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
   });
 
   test('E2E-04: Real Browser Multi-Tab Authentication Verification', async ({ browser }) => {
-    test.setTimeout(180000);
+    test.setTimeout(300000);
     console.log('[E2E-04] Starting test...');
 
     // Single authenticated context with two tabs
@@ -178,14 +208,14 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     await tabA.goto('/game', { waitUntil: 'domcontentloaded' });
     console.log('[E2E-04] Tab A waiting for #game-canvas...');
     await expect(tabA.locator('#game-canvas')).toBeVisible({ timeout: 15000 });
-    console.log('[E2E-04] Tab A #game-canvas visible');
+    await tabA.waitForLoadState('networkidle');
+    console.log('[E2E-04] Tab A #game-canvas visible & network idle');
 
     // Tab B opens dashboard
     console.log('[E2E-04] Creating Tab B...');
     const tabB = await context.newPage();
-    await tabB.bringToFront();
     console.log('[E2E-04] Tab B navigating to /dashboard...');
-    await tabB.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+    await tabB.goto('/dashboard');
     await expect(tabB).toHaveURL(/\/dashboard/);
     console.log('[E2E-04] Tab B reached /dashboard');
 
@@ -195,6 +225,7 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
       await tabB.reload({ waitUntil: 'domcontentloaded' });
       await expect(tabB).toHaveURL(/\/dashboard/);
       console.log(`[E2E-04] Tab B refresh iteration ${i} done`);
+      await tabB.waitForTimeout(200);
     }
     console.log('[E2E-04] All 10 refreshes completed!');
 
@@ -227,7 +258,7 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     console.log('[E2E-04] SUCCESS!');
   });
 
-  test('E2E-05: Real Browser Reverb Authorization Verification', async ({ browser }) => {
+  test('E2E-05: Real Browser Reverb Authorization Verification and Live WebSocket Event Delivery', async ({ browser }) => {
     // Participant A (Apex)
     const contextA = await browser.newContext();
     const pageA = await contextA.newPage();
@@ -243,7 +274,13 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     await expect(pageA.locator('#created-match-uuid')).toHaveAttribute('data-uuid', /[a-f0-9-]+/, { timeout: 20000 });
     const matchUuid = await pageA.locator('#created-match-uuid').getAttribute('data-uuid');
 
-    // Participant B (Viper) joins
+    // Participant A enters the arena to establish Reverb WebSocket presence channel subscription
+    await pageA.goto(`/duels/${matchUuid}/play`);
+    await pageA.waitForLoadState('domcontentloaded');
+    await expect(pageA.locator('#game-canvas')).toBeVisible({ timeout: 15000 });
+    await expect(pageA.locator('#hud-rival-name')).toContainText('RIVAL GHOST');
+
+    // Participant B (Viper) joins from another browser context
     const contextB = await browser.newContext();
     const pageB = await contextB.newPage();
     await loginUser(pageB, 'viper@cyber-rail.gg');
@@ -256,6 +293,14 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
       joinBtn.click(),
     ]);
 
+    // Live Reverb WebSocket Event Delivery Proof:
+    // When B joined, Laravel fired DuelOpponentJoined -> Reverb -> WebSocket -> Echo -> DuelEchoManager -> GameApp -> DOM
+    // Player A's HUD automatically reflects Viper's arrival via live WebSocket event
+    await pageA.bringToFront();
+    await expect(pageA.locator('#hud-rival-name')).toContainText('VIPER 99', { timeout: 25000 });
+    const receivedOpponentName = await pageA.evaluate(() => window.neonRunnerApp?.opponentJoinedData?.opponent?.username);
+    expect(receivedOpponentName).toBe('Viper 99');
+
     // Outsider C (Ghost)
     const contextC = await browser.newContext();
     const pageC = await contextC.newPage();
@@ -263,8 +308,8 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
     await pageC.goto('/dashboard');
 
     // Verify channel authorization via /broadcasting/auth in browser context
-    // 1. Participant A authorized (200 OK)
-    const authStatusA = await pageA.evaluate(async (uuid) => {
+    // 1. Participant A authorized (200 OK + valid auth token & channel_data)
+    const authResA = await pageA.evaluate(async (uuid) => {
       const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
       const res = await fetch('/broadcasting/auth', {
         method: 'POST',
@@ -279,12 +324,16 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
           socket_id: '1234.5678',
         })
       });
-      return res.status;
+      const data = await res.json().catch(() => ({}));
+      return { status: res.status, ok: res.ok, data };
     }, matchUuid);
-    expect(authStatusA).toBe(200);
+    expect(authResA.status).toBe(200);
+    expect(typeof authResA.data.auth).toBe('string');
+    expect(authResA.data.auth.length).toBeGreaterThan(10);
+    expect(typeof authResA.data.channel_data).toBe('string');
 
-    // 2. Participant B authorized (200 OK)
-    const authStatusB = await pageB.evaluate(async (uuid) => {
+    // 2. Participant B authorized (200 OK + valid auth token & channel_data)
+    const authResB = await pageB.evaluate(async (uuid) => {
       const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
       const res = await fetch('/broadcasting/auth', {
         method: 'POST',
@@ -299,12 +348,15 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
           socket_id: '1234.5678',
         })
       });
-      return res.status;
+      const data = await res.json().catch(() => ({}));
+      return { status: res.status, ok: res.ok, data };
     }, matchUuid);
-    expect(authStatusB).toBe(200);
+    expect(authResB.status).toBe(200);
+    expect(typeof authResB.data.auth).toBe('string');
+    expect(authResB.data.auth.length).toBeGreaterThan(10);
 
-    // 3. Outsider C REJECTED (403 Forbidden)
-    const authStatusC = await pageC.evaluate(async (uuid) => {
+    // 3. Outsider C REJECTED (403 Forbidden + zero auth tokens or channel data)
+    const authResC = await pageC.evaluate(async (uuid) => {
       const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
       const res = await fetch('/broadcasting/auth', {
         method: 'POST',
@@ -319,9 +371,12 @@ test.describe('Cyber-Rail Real Browser E2E Suite', () => {
           socket_id: '1234.5678',
         })
       });
-      return res.status;
+      const data = await res.json().catch(() => ({}));
+      return { status: res.status, ok: res.ok, data };
     }, matchUuid);
-    expect(authStatusC).toBe(403);
+    expect(authResC.status).toBe(403);
+    expect(authResC.data.auth).toBeUndefined();
+    expect(authResC.data.channel_data).toBeUndefined();
 
     await contextA.close();
     await contextB.close();

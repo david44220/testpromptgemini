@@ -187,6 +187,13 @@ export class GameEngine {
     _loop(currentTime) {
         if (!this.isRunning) return;
 
+        // Cap loop frequency to ~30 FPS to prevent SwiftShader CPU saturation in headless/software environments
+        if (currentTime - (this.lastRenderTime || 0) < 33) {
+            this.animationFrameId = requestAnimationFrame(this._loop);
+            return;
+        }
+        this.lastRenderTime = currentTime;
+
         // Skip heavy WebGL/SwiftShader rasterization when tab is hidden or unfocused and idle
         if (typeof document !== 'undefined' && (document.hidden || (!document.hasFocus() && this.tickCount === 0))) {
             this.lastTime = currentTime;
@@ -194,13 +201,6 @@ export class GameEngine {
             this.animationFrameId = requestAnimationFrame(this._loop);
             return;
         }
-
-        // Cap rendering to 30 FPS to prevent SwiftShader CPU saturation in headless/software environments
-        if (currentTime - (this.lastRenderTime || 0) < 33) {
-            this.animationFrameId = requestAnimationFrame(this._loop);
-            return;
-        }
-        this.lastRenderTime = currentTime;
 
         const frameDelta = (currentTime - this.lastTime) / 1000;
         this.lastTime = currentTime;

@@ -41,6 +41,14 @@ class DuelResolved implements ShouldBroadcastNow
     }
 
     /**
+     * The event's broadcast name.
+     */
+    public function broadcastAs(): string
+    {
+        return 'DuelResolved';
+    }
+
+    /**
      * Data broadcast to clients.
      *
      * @return array<string, mixed>
@@ -56,8 +64,8 @@ class DuelResolved implements ShouldBroadcastNow
             'status' => $this->match->status->value,
             'winner_uuid' => $this->winner?->uuid,
             'winner_user_id' => $this->winner?->id,
-            'winner_payout_cents' => $this->match->winner_payout_cents,
-            'total_pot_cents' => $this->match->total_pot_cents ?? ($this->match->stake_amount_cents * 2),
+            'winner_payout_cents' => ($this->match->winner_payout_cents > 0) ? $this->match->winner_payout_cents : max(0, ($this->match->stake_amount_cents * 2) - $this->match->platform_fee_cents),
+            'total_pot_cents' => ($this->match->total_pot_cents > 0) ? $this->match->total_pot_cents : ($this->match->stake_amount_cents * 2),
             'platform_fee_cents' => $this->match->platform_fee_cents,
             'rake_bps' => $this->match->rake_bps,
             'resolution_type' => $this->resolutionType,

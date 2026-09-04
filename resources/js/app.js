@@ -5,12 +5,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (canvas) {
         const seed = canvas.dataset.seed || '';
         const matchUuid = canvas.dataset.match || '';
-        const apiToken = canvas.dataset.token || '';
+        const seedCommitment = canvas.dataset.commitment || '';
+        const currentUserId = canvas.dataset.userId ? Number(canvas.dataset.userId) : null;
         const app = new GameApp({
             canvas,
             gameSeed: seed,
             matchUuid,
-            apiToken,
+            seedCommitment,
+            currentUserId,
             onGameOver: (payload) => {
                 console.log('[NeonRunner] Game Over Audit Payload:', payload);
             },

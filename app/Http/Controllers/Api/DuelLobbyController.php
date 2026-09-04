@@ -536,9 +536,9 @@ class DuelLobbyController extends Controller
             'status' => $match->status->value,
             'resolution_state' => $resolutionState,
             'winner_user_id' => $match->winner_user_id,
-            'total_pot_cents' => $match->total_pot_cents ?? ($match->stake_amount_cents * 2),
+            'total_pot_cents' => ($match->total_pot_cents > 0) ? $match->total_pot_cents : ($match->stake_amount_cents * 2),
             'platform_fee_cents' => $match->platform_fee_cents,
-            'winner_payout_cents' => $match->winner_payout_cents,
+            'winner_payout_cents' => ($match->winner_payout_cents > 0) ? $match->winner_payout_cents : max(0, ($match->stake_amount_cents * 2) - $match->platform_fee_cents),
             'rake_bps' => $match->rake_bps,
             'player' => [
                 'user_id' => $user->id,

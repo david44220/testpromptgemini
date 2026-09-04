@@ -7,11 +7,13 @@ namespace Tests\Feature;
 use App\Enums\MatchStatus;
 use App\Events\Duel\DuelOpponentJoined;
 use App\Events\Duel\DuelTelemetryUpdated;
+use App\Events\DuelResolved;
 use App\Models\MatchGame;
 use App\Models\User;
 use App\Models\Wallet;
 use Database\Seeders\LedgerAccountSeeder;
 use Illuminate\Broadcasting\PresenceChannel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Broadcast;
@@ -164,6 +166,41 @@ class ReverbWebSocketBroadcastTest extends TestCase
         $this->assertSame(1, $payload['current_lane']);
         $this->assertTrue($payload['is_alive']);
         $this->assertSame(1726000021450, $payload['timestamp']);
+    }
+
+    /**
+     * Test DuelResolved event properties, channels, and broadcastAs contract.
+     */
+    public function test_duel_resolved_event_implements_should_broadcast_now_and_broadcasts_as_duel_resolved(): void
+    {
+        /** @var User $creator */
+        $creator = User::factory()->create();
+        /** @var User $opponent */
+        $opponent = User::factory()->create();
+
+        $match = MatchGame::factory()->create([
+            'creator_user_id' => $creator->id,
+            'opponent_user_id' => $opponent->id,
+            'status' => MatchStatus::Completed,
+            'winner_user_id' => $creator->id,
+        ]);
+
+        $event = new DuelResolved($match, $creator, 'VICTORY');
+
+        $this->assertInstanceOf(ShouldBroadcastNow::class, $event);
+        $this->assertSame('DuelResolved', $event->broadcastAs());
+
+        $channels = $event->broadcastOn();
+        $this->assertCount(2, $channels);
+        $this->assertInstanceOf(PresenceChannel::class, $channels[0]);
+        $this->assertSame("presence-duel.{$match->uuid}", $channels[0]->name);
+        $this->assertInstanceOf(PrivateChannel::class, $channels[1]);
+        $this->assertSame("private-match.{$match->uuid}", $channels[1]->name);
+
+        $payload = $event->broadcastWith();
+        $this->assertSame($match->uuid, $payload['match_uuid']);
+        $this->assertSame($creator->uuid, $payload['winner_uuid']);
+        $this->assertSame('VICTORY', $payload['resolution_type']);
     }
 
     /**

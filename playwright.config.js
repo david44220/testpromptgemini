@@ -13,6 +13,8 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:8000',
     viewport: { width: 1280, height: 720 },
     headless: true,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
     launchOptions: {
       args: [
         '--use-gl=angle',

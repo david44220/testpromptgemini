@@ -20,7 +20,13 @@ class RunAuditService
 
     public const float KINEMATIC_TOLERANCE_MULTIPLIER = 1.15; // ±15% buffer
 
-    public const float MAX_TEMPORAL_DELTA_SECONDS = 2.5; // ±2.5s network latency margin
+    public const float MAX_SPEEDUP_TOLERANCE_SECONDS = 2.5; // Up to 2.5s clock skew / fast ticks
+
+    public const float MAX_SIMULATION_SLOWDOWN_SECONDS = 6.0; // Up to 6.0s simulation lag / frame stalls
+
+    public const float MAX_SUBMISSION_TRANSPORT_GRACE_SECONDS = 10.0; // Up to 10.0s HTTP transport latency post-run
+
+    public const float MAX_TEMPORAL_DELTA_SECONDS = self::MAX_SPEEDUP_TOLERANCE_SECONDS; // Backward compatibility alias
 
     public const int MIN_TICKS_BETWEEN_LANE_SWITCHES = 7; // ~120ms at 60Hz
 
@@ -131,13 +137,13 @@ class RunAuditService
         $ticksSeconds = $ticksElapsed / 60.0;
 
         // 1. Client running faster than physical time (Speedhack: claiming more simulation time than wall-clock time)
-        if ($ticksSeconds - $realDurationSeconds > self::MAX_TEMPORAL_DELTA_SECONDS) {
+        if ($ticksSeconds - $realDurationSeconds > self::MAX_SPEEDUP_TOLERANCE_SECONDS) {
             return false;
         }
 
-        // 2. Client lagging or network submission delay: allow up to forfeit window
-        $maxLagBuffer = (float) config('duels.forfeit_timeout_seconds', 180);
-        if ($realDurationSeconds - $ticksSeconds > $maxLagBuffer) {
+        // 2. Slow-motion cheating: wall-clock gameplay time exceeds simulation time beyond allowable lag + network grace
+        $maxAllowedDuration = $ticksSeconds + self::MAX_SIMULATION_SLOWDOWN_SECONDS + self::MAX_SUBMISSION_TRANSPORT_GRACE_SECONDS;
+        if ($realDurationSeconds > $maxAllowedDuration) {
             return false;
         }
 

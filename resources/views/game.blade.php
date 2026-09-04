@@ -34,6 +34,7 @@
             data-match="{{ $matchUuid ?? '' }}"
             data-stake="{{ $stakeCents ?? 5000 }}"
             data-pot="{{ $potCents ?? 10000 }}"
+            data-user-id="{{ $user->id }}"
         ></canvas>
 
         <!-- Real-Time Decoupled HUD Overlay Layer (pointer-events-none) -->

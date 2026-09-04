@@ -26,10 +26,13 @@ export class GameApp {
     constructor(config) {
         this.canvas = config.canvas;
         this.gameSeed = config.gameSeed || this._generateRandomSeed();
+        this.expectedSeedCommitment = config.seedCommitment || (this.canvas && this.canvas.dataset ? this.canvas.dataset.commitment : '') || '';
         this.matchUuid = config.matchUuid || null;
-        this.apiToken = config.apiToken || '';
+        this.currentUserId = config.currentUserId || (this.canvas && this.canvas.dataset && this.canvas.dataset.userId ? Number(this.canvas.dataset.userId) : null);
         this.onGameOverCallback = config.onGameOver || null;
         this.onDuelResolvedCallback = config.onDuelResolved || null;
+        this.opponentJoinedData = null;
+        this.duelResolvedData = null;
 
         // State
         this.state = 'READY'; // 'READY' | 'PLAYING' | 'GAME_OVER'
@@ -68,7 +71,6 @@ export class GameApp {
         if (this.matchUuid) {
             this.network = new DuelEchoManager({
                 matchUuid: this.matchUuid,
-                apiToken: this.apiToken,
                 onOpponentJoined: (data) => this._onOpponentJoined(data),
                 onTelemetry: (telemetry) => {
                     this.opponentScore = telemetry.score;
@@ -76,7 +78,9 @@ export class GameApp {
                     this.ghostRunner.applyTelemetry(telemetry);
                 },
                 onDuelResolved: (result) => {
+                    this.duelResolvedData = result;
                     if (this.onDuelResolvedCallback) this.onDuelResolvedCallback(result);
+                    this._applyAuthoritativeResult(result);
                 },
             });
         }
@@ -102,6 +106,17 @@ export class GameApp {
             res += chars[Math.floor(Math.random() * chars.length)];
         }
         return res;
+    }
+
+    async _computeSha256(message) {
+        if (typeof crypto !== 'undefined' && crypto.subtle) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+        }
+        return '';
     }
 
     _prepopulateTrack() {
@@ -160,7 +175,7 @@ export class GameApp {
         if (this.state === 'PLAYING' || this.isStarting) return;
 
         const startBanner = document.getElementById('hud-start-banner');
-        const bannerTitle = startBanner ? startBanner.querySelector('h1') : null;
+        const bannerTitle = startBanner ? (startBanner.querySelector('h2') || startBanner.querySelector('h1')) : null;
         const bannerSub = startBanner ? startBanner.querySelector('p') : null;
 
         // Authoritative Duel: Negotiate ticket with server before simulation starts
@@ -180,7 +195,6 @@ export class GameApp {
                         Accept: 'application/json',
                         'X-CSRF-TOKEN': csrfToken,
                         'X-Requested-With': 'XMLHttpRequest',
-                        ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                     },
                 });
 
@@ -192,11 +206,27 @@ export class GameApp {
                     return;
                 }
 
+                // Cryptographic commitment verification before entering PLAYING state
+                if (this.expectedSeedCommitment && data.game_seed) {
+                    const computedHash = await this._computeSha256(data.game_seed);
+                    if (computedHash.toLowerCase() !== this.expectedSeedCommitment.toLowerCase()) {
+                        console.error('[AntiCheat] Seed commitment integrity mismatch!', {
+                            expected: this.expectedSeedCommitment,
+                            computed: computedHash,
+                        });
+                        this.ticketToken = null;
+                        this.isStarting = false;
+                        if (bannerTitle) bannerTitle.textContent = 'INTEGRITY FAILURE';
+                        if (bannerSub) bannerSub.textContent = 'Cryptographic seed commitment mismatch. Run aborted.';
+                        return;
+                    }
+                }
+
                 this.ticketToken = data.ticket_token;
                 if (data.game_seed) {
                     this.gameSeed = data.game_seed;
                 }
-            } catch {
+            } catch (err) {
                 this.isStarting = false;
                 if (bannerTitle) bannerTitle.textContent = 'CONNECTION ERROR';
                 if (bannerSub) bannerSub.textContent = 'Failed to obtain run ticket. Please check network.';
@@ -375,11 +405,27 @@ export class GameApp {
     }
 
     _onOpponentJoined(data) {
-        if (!this.hudContainer) return;
-        const statusEl = this.hudContainer.querySelector('#hud-duel-status');
+        this.opponentJoinedData = data;
+        const opponentName = data.opponent?.username || data.opponent?.name || 'RIVAL';
+
+        const rivalNameEl = document.getElementById('hud-rival-name');
+        if (rivalNameEl) {
+            rivalNameEl.textContent = opponentName.toUpperCase();
+        }
+
+        const rivalAvatarEl = document.getElementById('hud-rival-avatar');
+        if (rivalAvatarEl && data.opponent?.avatar_url) {
+            rivalAvatarEl.src = data.opponent.avatar_url;
+        }
+
+        const statusEl = document.getElementById('hud-duel-status');
         if (statusEl) {
-            statusEl.textContent = `OPPONENT CONNECTED: ${data.opponent?.username || 'PLAYER 2'}`;
+            statusEl.textContent = `OPPONENT CONNECTED: ${opponentName.toUpperCase()}`;
             statusEl.style.display = 'block';
+        }
+
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('duel:opponent-joined', { detail: data }));
         }
     }
 
@@ -495,7 +541,6 @@ export class GameApp {
                     Accept: 'application/json',
                     'X-CSRF-TOKEN': csrfToken,
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
                 body: JSON.stringify({
                     ticket_token: tokenToSubmit,
@@ -577,7 +622,6 @@ export class GameApp {
                                 Accept: 'application/json',
                                 'X-CSRF-TOKEN': csrfToken,
                                 'X-Requested-With': 'XMLHttpRequest',
-                                ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                             },
                             body: JSON.stringify({ creative_id: 'rewarded-sponsor-clip' }),
                         });
@@ -640,7 +684,6 @@ export class GameApp {
                         Accept: 'application/json',
                         'X-CSRF-TOKEN': csrfToken,
                         'X-Requested-With': 'XMLHttpRequest',
-                        ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                     },
                 });
 
@@ -685,11 +728,46 @@ export class GameApp {
         const rivalDistEl = postModal.querySelector('#modal-rival-distance');
         const rivalScoreEl = postModal.querySelector('#modal-rival-score');
 
-        const state = result.resolution_state || result.resolution_type || 'COMPLETED';
-        const isVictory = state === 'VICTORY' || state === 'FORFEIT WIN';
-        const isDefeat = state === 'DEFEAT' || state === 'FORFEIT LOSS';
-        const isDisputed = state === 'DISPUTED';
-        const isCancelled = state === 'CANCELLED' || state === 'ABANDONED_CANCELLED';
+        const myUserId = this.currentUserId || (this.canvas && this.canvas.dataset && this.canvas.dataset.userId ? Number(this.canvas.dataset.userId) : null) || (result.player ? Number(result.player.user_id) : null);
+
+        let isVictory = false;
+        let isDefeat = false;
+        let isDisputed = false;
+        let isCancelled = false;
+        let state = 'COMPLETED';
+
+        if (result.resolution_state) {
+            // Personalized resolution_state from /matches/{uuid}/result endpoint
+            state = result.resolution_state;
+            isVictory = state === 'VICTORY' || state === 'FORFEIT WIN';
+            isDefeat = state === 'DEFEAT' || state === 'FORFEIT LOSS';
+            isDisputed = state === 'DISPUTED';
+            isCancelled = state === 'CANCELLED' || state === 'ABANDONED_CANCELLED';
+        } else {
+            // Match-level resolution payload from .DuelResolved broadcast
+            const rawType = result.resolution_type || result.status || 'COMPLETED';
+            if (rawType === 'CANCELLED' || rawType === 'ABANDONED_CANCELLED' || result.status === 'cancelled') {
+                isCancelled = true;
+                state = 'CANCELLED';
+            } else if (rawType === 'DISPUTED' || result.status === 'disputed') {
+                isDisputed = true;
+                state = 'DISPUTED';
+            } else if (result.winner_user_id !== undefined && result.winner_user_id !== null && myUserId !== null) {
+                if (Number(result.winner_user_id) === Number(myUserId)) {
+                    isVictory = true;
+                    state = (rawType === 'FORFEIT' || rawType === 'FORFEIT WIN') ? 'FORFEIT WIN' : 'VICTORY';
+                } else {
+                    isDefeat = true;
+                    state = (rawType === 'FORFEIT' || rawType === 'FORFEIT LOSS') ? 'FORFEIT LOSS' : 'DEFEAT';
+                }
+            } else {
+                state = rawType;
+                isVictory = state === 'VICTORY' || state === 'FORFEIT WIN';
+                isDefeat = state === 'DEFEAT' || state === 'FORFEIT LOSS';
+                isDisputed = state === 'DISPUTED';
+                isCancelled = state === 'CANCELLED' || state === 'ABANDONED_CANCELLED';
+            }
+        }
 
         if (titleEl) {
             if (isVictory) {
@@ -714,21 +792,25 @@ export class GameApp {
             else statusBadge.textContent = 'ESCROW REFUNDED';
         }
 
-        const totalPotCents = result.total_pot_cents || 0;
-        const feeCents = result.platform_fee_cents || 0;
-        const payoutCents = result.winner_payout_cents || 0;
+        const fallbackPot = this.canvas && this.canvas.dataset && this.canvas.dataset.pot ? Number(this.canvas.dataset.pot) : 10000;
+        const totalPotCents = (result.total_pot_cents && result.total_pot_cents > 0) ? result.total_pot_cents : fallbackPot;
+        const feeCents = (result.platform_fee_cents !== undefined && result.platform_fee_cents !== null && result.platform_fee_cents > 0) ? result.platform_fee_cents : Math.floor(totalPotCents * 0.10);
+        const payoutCents = (result.winner_payout_cents && result.winner_payout_cents > 0) ? result.winner_payout_cents : Math.max(0, totalPotCents - feeCents);
 
         if (grossEl) grossEl.textContent = `$${(totalPotCents / 100).toFixed(2)}`;
         if (rakeEl) rakeEl.textContent = `$${(feeCents / 100).toFixed(2)}`;
 
-        // Authoritative metrics
-        if (result.player) {
-            if (yourDistEl) yourDistEl.textContent = `${Math.floor(result.player.authoritative_distance)} m`;
-            if (yourScoreEl) yourScoreEl.textContent = `${Math.floor(result.player.authoritative_score)} PTS`;
+        // Authoritative metrics (supports /result player/rival keys and broadcast creator/opponent keys)
+        const playerMetrics = result.player || (myUserId && result.creator && Number(result.creator.user_id) === Number(myUserId) ? result.creator : (myUserId && result.opponent && Number(result.opponent.user_id) === Number(myUserId) ? result.opponent : null));
+        const rivalMetrics = result.rival || (myUserId && result.creator && Number(result.creator.user_id) === Number(myUserId) ? result.opponent : (myUserId && result.opponent && Number(result.opponent.user_id) === Number(myUserId) ? result.creator : null));
+
+        if (playerMetrics) {
+            if (yourDistEl) yourDistEl.textContent = `${Math.floor(playerMetrics.authoritative_distance || 0)} m`;
+            if (yourScoreEl) yourScoreEl.textContent = `${Math.floor(playerMetrics.authoritative_score || 0)} PTS`;
         }
-        if (result.rival) {
-            if (rivalDistEl) rivalDistEl.textContent = `${Math.floor(result.rival.authoritative_distance)} m`;
-            if (rivalScoreEl) rivalScoreEl.textContent = `${Math.floor(result.rival.authoritative_score)} PTS`;
+        if (rivalMetrics) {
+            if (rivalDistEl) rivalDistEl.textContent = `${Math.floor(rivalMetrics.authoritative_distance || 0)} m`;
+            if (rivalScoreEl) rivalScoreEl.textContent = `${Math.floor(rivalMetrics.authoritative_score || 0)} PTS`;
         }
 
         if (payoutEl) {

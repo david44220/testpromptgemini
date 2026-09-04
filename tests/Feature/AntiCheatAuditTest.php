@@ -175,6 +175,62 @@ class AntiCheatAuditTest extends TestCase
     }
 
     /**
+     * Test Rule 1: Anti-slow-motion and temporal integrity vectors (60s simulation baseline).
+     */
+    public function test_temporal_integrity_anti_slow_motion_vectors(): void
+    {
+        $now = now();
+        $simTicks60s = 3600; // 60 simulated seconds = 3600 ticks at 60 Hz
+
+        // Vector 1: 60 simulated seconds / 60 real seconds -> PASS
+        $this->assertTrue(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(60), $now),
+            '60s simulation completed in 60s real time must pass.'
+        );
+
+        // Vector 2: 60 simulated seconds / 62 real seconds -> PASS (within 16.0s tolerance)
+        $this->assertTrue(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(62), $now),
+            '60s simulation completed in 62s real time must pass (within lag+grace buffer).'
+        );
+
+        // Vector 3: 60 simulated seconds / 90 real seconds -> FAIL (slow-motion cheater)
+        $this->assertFalse(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(90), $now),
+            '60s simulation completed in 90s real time must fail (slow-motion exploit).'
+        );
+
+        // Vector 4: 60 simulated seconds / 180 real seconds -> FAIL (slow-motion cheater attempting forfeit window)
+        $this->assertFalse(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(180), $now),
+            '60s simulation completed in 180s real time must fail.'
+        );
+
+        // Vector 5: 60 simulated seconds / 30 real seconds -> FAIL (speedhack running 2x speed)
+        $this->assertFalse(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(30), $now),
+            '60s simulation completed in 30s real time must fail (speedhack).'
+        );
+    }
+
+    /**
+     * Test that duels.forfeit_timeout_seconds configuration does NOT alter simulation clock tolerance.
+     */
+    public function test_forfeit_timeout_does_not_relax_simulation_tolerance(): void
+    {
+        config(['duels.forfeit_timeout_seconds' => 300]); // 5 minutes forfeit window
+
+        $now = now();
+        $simTicks60s = 3600;
+
+        // Still strictly fails at 90s despite 300s forfeit window
+        $this->assertFalse(
+            $this->auditService->verifyTemporalIntegrity($simTicks60s, $now->copy()->subSeconds(90), $now),
+            'Changing forfeit_timeout_seconds must NOT relax anti-slow-motion simulation tolerance.'
+        );
+    }
+
+    /**
      * Test Rule 2: Kinematic feasibility rejects unrealistic distance exceeding 38 m/s speed limit.
      */
     public function test_kinematic_feasibility_rejects_excessive_distance(): void

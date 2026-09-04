@@ -90,6 +90,12 @@ jobs:
         run: |
           cp .env.example .env
           php artisan key:generate
+          sed -i 's/DB_CONNECTION=sqlite/DB_CONNECTION=pgsql/' .env
+          sed -i 's/# DB_HOST=127.0.0.1/DB_HOST=127.0.0.1/' .env
+          sed -i 's/# DB_PORT=3306/DB_PORT=5432/' .env
+          sed -i 's/# DB_DATABASE=laravel/DB_DATABASE=cyber_arena_test/' .env
+          sed -i 's/# DB_USERNAME=root/DB_USERNAME=postgres/' .env
+          sed -i 's/# DB_PASSWORD=/DB_PASSWORD=postgres/' .env
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
@@ -159,13 +165,28 @@ jobs:
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Build Frontend Assets
-        run: npm run build
-
       - name: Setup Environment
         run: |
           cp .env.example .env
           php artisan key:generate
+          sed -i 's/DB_CONNECTION=sqlite/DB_CONNECTION=pgsql/' .env
+          sed -i 's/# DB_HOST=127.0.0.1/DB_HOST=127.0.0.1/' .env
+          sed -i 's/# DB_PORT=3306/DB_PORT=5432/' .env
+          sed -i 's/# DB_DATABASE=laravel/DB_DATABASE=cyber_arena_test/' .env
+          sed -i 's/# DB_USERNAME=root/DB_USERNAME=postgres/' .env
+          sed -i 's/# DB_PASSWORD=/DB_PASSWORD=postgres/' .env
+          sed -i 's/BROADCAST_CONNECTION=log/BROADCAST_CONNECTION=reverb/' .env
+          sed -i 's/# PHP_CLI_SERVER_WORKERS=4/PHP_CLI_SERVER_WORKERS=4/' .env
+          echo "REVERB_APP_KEY=cyber_key" >> .env
+          echo "REVERB_APP_SECRET=cyber_secret" >> .env
+          echo "REVERB_APP_ID=100001" >> .env
+          echo "REVERB_HOST=127.0.0.1" >> .env
+          echo "REVERB_PORT=8080" >> .env
+          echo "REVERB_SCHEME=http" >> .env
+          echo "VITE_REVERB_APP_KEY=cyber_key" >> .env
+          echo "VITE_REVERB_HOST=127.0.0.1" >> .env
+          echo "VITE_REVERB_PORT=8080" >> .env
+          echo "VITE_REVERB_SCHEME=http" >> .env
         env:
           DB_CONNECTION: pgsql
           DB_HOST: 127.0.0.1
@@ -173,6 +194,14 @@ jobs:
           DB_DATABASE: cyber_arena_test
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+
+      - name: Build Frontend Assets
+        run: npm run build
+        env:
+          VITE_REVERB_APP_KEY: cyber_key
+          VITE_REVERB_HOST: 127.0.0.1
+          VITE_REVERB_PORT: 8080
+          VITE_REVERB_SCHEME: http
 
       - name: Run PostgreSQL Migrations and Seeders
         run: php artisan migrate:fresh --seed --database=pgsql --force
@@ -194,6 +223,8 @@ jobs:
           DB_DATABASE: cyber_arena_test
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
+          PHP_CLI_SERVER_WORKERS: 4
+          BROADCAST_CONNECTION: reverb
           REVERB_APP_KEY: cyber_key
           REVERB_APP_SECRET: cyber_secret
           REVERB_APP_ID: 100001
@@ -204,3 +235,13 @@ jobs:
           VITE_REVERB_HOST: 127.0.0.1
           VITE_REVERB_PORT: 8080
           VITE_REVERB_SCHEME: http
+
+      - name: Upload Playwright Artifacts on Failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-failure-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

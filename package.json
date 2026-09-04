@@ -5,8 +5,10 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "test:determinism": "node --test tests/javascript/determinism.test.js",
+        "test:determinism": "node --test tests/javascript/determinism.test.js tests/javascript/seed_commitment.test.js tests/javascript/headless_parity.test.js",
         "test:ticks": "node --test tests/javascript/ticks.test.js",
+        "test:commitment": "node --test tests/javascript/seed_commitment.test.js",
+        "test:headless": "node --test tests/javascript/headless_parity.test.js",
         "test:e2e": "playwright test"
     },
     "devDependencies": {

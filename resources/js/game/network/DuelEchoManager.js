@@ -10,7 +10,6 @@ export class DuelEchoManager {
     /**
      * @param {Object} config
      * @param {string} config.matchUuid
-     * @param {string} [config.apiToken]
      * @param {Function} [config.onOpponentJoined] (data) => void
      * @param {Function} [config.onTelemetry] (telemetry) => void
      * @param {Function} [config.onDuelResolved] (result) => void
@@ -18,7 +17,6 @@ export class DuelEchoManager {
      */
     constructor(config) {
         this.matchUuid = config.matchUuid;
-        this.apiToken = config.apiToken || '';
         this.onOpponentJoined = config.onOpponentJoined || (() => {});
         this.onTelemetry = config.onTelemetry || (() => {});
         this.onDuelResolved = config.onDuelResolved || (() => {});
@@ -67,7 +65,6 @@ export class DuelEchoManager {
                     Accept: 'application/json',
                     'X-CSRF-TOKEN': csrfToken,
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
             },
         });
@@ -139,7 +136,6 @@ export class DuelEchoManager {
                     Accept: 'application/json',
                     'X-CSRF-TOKEN': csrfToken,
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
                 },
                 body: JSON.stringify({
                     distance: data.distance,

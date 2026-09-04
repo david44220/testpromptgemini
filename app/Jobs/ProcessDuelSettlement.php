@@ -130,6 +130,7 @@ class ProcessDuelSettlement implements ShouldQueue
                     // Both passed cleanly -> determine winner
                     $winner = $this->determineWinner($match, $creator, $opponent, $creatorRun, $opponentRun);
                     $ledgerService->settleMatch($match, $winner);
+                    $match->refresh();
                     DB::afterCommit(static function () use ($match, $winner): void {
                         event(new DuelResolved($match, $winner, 'VICTORY'));
                     });
@@ -210,6 +211,7 @@ class ProcessDuelSettlement implements ShouldQueue
         }
 
         $ledgerService->settleMatch($match, $winner);
+        $match->refresh();
         DB::afterCommit(static function () use ($match, $winner): void {
             event(new DuelResolved($match, $winner, 'FORFEIT'));
         });
